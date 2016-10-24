@@ -32,14 +32,10 @@ int update_crc( int crc, byte[] s)
   for (int i = 0; i < s.length; i++)
   {
     /* XOR in the data. */
-    crc ^= s[i];
-    println(String.format("<%x>",s[i]));
-    println(String.format("%X", crc));
+    crc ^= s[i] & 0x0000ff; //println(String.format("<%H>", s[i]& 0x0000ff));
     /* Perform the XORing for each nybble. avoid sign extension */
-    crc = (crc >>> 4) ^ crc_table[crc & 0x0f];
-    println(String.format("%X", crc));
-    crc = (crc >>> 4) ^ crc_table[crc & 0x0f];
-    println(String.format("%X", crc));
+    crc = (crc >>> 4) ^ crc_table[crc & 0x0f]; //println(String.format("%H", crc_table[crc & 0x0f] ));
+    crc = (crc >>> 4) ^ crc_table[crc & 0x0f]; //println(String.format("%H", crc_table[crc & 0x0f] ));
   }
   return crc;
 }
@@ -332,13 +328,13 @@ void serialEvent(Serial valkyrie) {
       break ;
     case CMD.SET_PARAM:
       print(response);
-      //if (response.startsWith("OK") ){
+      if (response.startsWith("OK") ){
          last_cmd = CMD.NONE;
          waiting_line = false;
          break ;
-      //} 
-      //resend();
-      //break ;
+      } 
+      resend();
+      break ;
     case CMD.NONE: 
       print(response);
       waiting_line = false;
