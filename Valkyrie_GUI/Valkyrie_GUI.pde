@@ -53,12 +53,18 @@ int background = color(0,0,0);
 int bgcolor;           // Background color
 int fgcolor;           // Fill color
 
-float kP = 3.0;
-float kI = 2.0; // mils = 0.002
-float kD = 2.0; // cents = 0.02
+float kP = .98;
+float kI = .01; 
+float kD = .5; 
  
-float minK = -5 ;
-float maxK = 5 ;
+float minkP = 0 ;
+float maxkP = 5 ;
+
+float minkI = 0 ;
+float maxkI = 1 ;
+
+float minkD = 0 ;
+float maxkD = 2 ;
 
 boolean heart_beat = false ;
 
@@ -188,9 +194,18 @@ void setup() {
                  .setFont(createFont("Georgia",20))
                   ;
   };
+       
+  // add a vertical slider for target angle
+  cp5.addSlider("target")
+     .setPosition(50,300)
+     .setSize(20,300)
+     .setRange(-10,10)
+     .setNumberOfTickMarks(21)
+     .setValue(0)
+     ;                              
                                 
   kPKnob = cp5.addKnob("kP")
-               .setRange(minK, maxK)
+               .setRange(minkP, maxkP)
                .setValue(kP)
                .setPosition(100, 300)
                .setRadius(50)
@@ -201,7 +216,7 @@ void setup() {
                //.setViewStyle(Knob.ARC)
                ;
   kIKnob = cp5.addKnob("kI")
-               .setRange(minK, maxK)
+               .setRange(minkI, maxkI)
                .setValue(kI)
                .setPosition(220, 300)
                .setRadius(50)
@@ -211,7 +226,7 @@ void setup() {
                .setResolution(1000)
                ;
   kDKnob = cp5.addKnob("kD")
-               .setRange(minK, maxK)
+               .setRange(minkD, maxkD)
                .setValue(kD)
                .setPosition(340, 300)
                .setRadius(50)
@@ -256,7 +271,7 @@ void setup() {
   console = cp5.addConsole(textarea);//
   plot = cp5.addChart("error plot")
                .setPosition(50, 50)
-               .setSize(400, 200)
+               .setSize(450, 200)
                .setRange(-30, 30)
                .setColorCaptionLabel(color(40))
                .setView(Chart.LINE) 
@@ -302,7 +317,7 @@ void serialEvent(Serial valkyrie) {
     for(int p=0; p<= data_len; ++p) {
       float v = float(points[p+2]);
       if (Float.isNaN(v)) v=0;
-      plot.push(log_point_names[p], float(points[p+2]) * log_point_scale[p] );
+      plot.push(log_point_names[p], v * log_point_scale[p] );
       text[p].setText(points[p+2]);  
     }
 

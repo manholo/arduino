@@ -83,13 +83,13 @@ boolean check_crc( byte* data, int len) {
                  (uint32_t)(byte)data[len-3] << 16 | 
                  (uint32_t)(byte)data[len-2] << 8  |
                  (uint32_t)(byte)data[len-1];
-  uint32_t ccrc = compute_crc(  data, len - 4 ) ;
-  Serial.print("CRC Read:     ");
-  Serial.println(crc, HEX);
-  Serial.print("CRC Computed: ");
-  Serial.println(ccrc, HEX);
-  return ccrc == crc ;
-  //return compute_crc(  data, len - 4 ) == crc ;
+  return compute_crc(  data, len - 4 ) == crc ;
+  //uint32_t ccrc = compute_crc(  data, len - 4 ) ;
+  //Serial.print("CRC Read:     ");
+  //Serial.println(crc, HEX);
+  //Serial.print("CRC Computed: ");
+  //Serial.println(ccrc, HEX);
+  //return ccrc == crc ;
 }
 
 // class default I2C address is 0x68
@@ -104,6 +104,7 @@ bool dmpReady = false;  // set true if DMP init was successful
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
 uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
+
 uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 
@@ -121,8 +122,10 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 
 // INTERRUPT DETECTION ROUTINE
 volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+volatile bool waiting_for_FIFO = false;
 void dmpDataReady() {
     mpuInterrupt = true;
+    if (waiting_for_FIFO) { Wire_setup(); mpuInterrupt = false; waiting_for_FIFO = false; }
 }
 
 //////////
@@ -165,28 +168,34 @@ SoftwareSerial BTserial(rxPin, txPin); // RX | TX
 bool LOGGING = false ;   // enable logging to GUI
 const bool RUN = true ;  // enable motors
 
-
-int pos = 105;    // leg pos
-
-int max_speed = 200 ; // 120 
-int min_speed = 65 ; // 100 90 
-float crash_ang = 45.0 ;
-
-// pid controler parameters
-
+/// timming
 unsigned long t_now = 0;
 unsigned long t_last = 0;
 unsigned long t_last_log = -1 ; 
 
-float pid_P = 3.5 ; // 3.0; 5.5
-float pid_I = 0.000; // 0.02  .002
-float pid_D = 0.000; // .002 ;
+
+/////////////////////////////////////////////////////////////////
+int pos = 105;    // leg pos
+
+// motor velocities
+int max_speed = 250 ; // 120 
+int min_speed = 70 ; // 100 90 
+float crash_ang = 60.0 ;
+
+// target angle and safe zone. depends on, e.g. kind of batteries used.
+// todo: nest another PID to find the target angle (is the one that gets null ang. vel.)
+float target = 4.9 ; // 1.3 ;//6.5 ; //7.00 ;//5.73; // 4.65 ; // for pos = 105
+float hist = 0.1 ; // degrees
+
+// kP = 1.5 kI = 0.01 kD = .04
+// pid controler parameters
+float pid_P = .983;// .81 ; // 3.0; 5.5
+float pid_I = 0.0251; // 0.02  .002
+float pid_D = .5; // .002 ;
+/////////////////////////////////////////////////////////////////
 
 float int_error = 0 ;
 
-float target = 5.73; // 4.65 ; // for pos = 105
-
-float hist = 0.5 ; // degrees
 //const int motor_delay = 100;
 const float dg_rad = 180/M_PI ;
 
@@ -243,7 +252,10 @@ float log_point[data_len] ; // t, angle, fbp, fbi, fbd, speed
 //const int LIMIT = 1500;
 //int collar( int x) { return x<-LIMIT? -LIMIT : x>LIMIT? LIMIT: x ; }
 
-void setup() {
+void Wire_setup() {
+
+    Serial.println(F("Wire setup"));
+     
     // join I2C bus (I2Cdev library doesn't do this automatically)
     #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
         Wire.begin();
@@ -251,14 +263,12 @@ void setup() {
     #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
         Fastwire::setup(400, true);
     #endif
-    
-    Serial.begin(115200); 
-    Serial.println(F("Pair with me!"));
+}
 
-    // initialize device
+void IMU_setup() {
+      // initialize device
     Serial.println(F("Initializing I2C devices..."));
     mpu.initialize();
-    pinMode(pinint, INPUT);
 
     // load and configure the DMP
     Serial.println(F("Initializing DMP..."));
@@ -311,9 +321,12 @@ void setup() {
         Serial.println(F(")"));
     }
 
+}
 
-  
-  // motors
+void IO_setup() {
+  // IMU interrupt
+  pinMode(pinint, INPUT);
+   // motors
   pinMode(pinIN1, OUTPUT);
   pinMode(pinIN2, OUTPUT);
   pinMode(pinENA, OUTPUT);
@@ -324,36 +337,62 @@ void setup() {
   pinMode(rxPin, INPUT);
   pinMode(txPin, OUTPUT);
   pinMode(BTLEDPin, OUTPUT); 
-
-  digitalWrite(BTLEDPin, HIGH);  
-  delay(1000);
-  digitalWrite(BTLEDPin, LOW);
-      
-  // HC-06 default serial speed is 9600
-  BTserial.begin(115200);
-  BTserial.setTimeout(100);
-    
   // servos
   Lservo.attach(pinSrvL);  // attaches the Left servo
   Rservo.attach(pinSrvR);  // Right
+}
 
-  zero(60) ;
-  delay(1000); 
-  zero(pos);
+
+void comms_setup() {
+
+  Serial.begin(115200); 
+  Serial.println(F("Pair with me!"));
+  // HC-06 default serial speed is 9600, this unit was setup for 115200
+  BTserial.begin(115200);
+  BTserial.setTimeout(100);
   
-  
+}
+
+void T_setup() {
+    
   for(int p = 0; p<=data_len; ++p ) log_point[p] = 0.0; 
   t_now = millis() ;
   t_last = t_now - 500  ;
   timeout = t_now + 1500 ;
 
-  Serial.print(F(   "kP = ")) ;  Serial.print( pid_P ) ; 
-  Serial.print(F( ", kI = ")) ;  Serial.print( pid_I ) ; 
-  Serial.print(F( ", kD = ")) ;  Serial.println( pid_D ) ; 
+}
+
+void IamAlive() {
+  
+  digitalWrite(BTLEDPin, HIGH);  
+  delay(1000);
+  digitalWrite(BTLEDPin, LOW);
+      
+  zero(60) ;
+  delay(1000); 
+  zero(pos);
+
+  //Lservo.detach();  // detach servos for tests or similar, the valkyrie won't support itself!
+  //Rservo.detach();  // (the servos catch lots of EMI from the PCM for the motors: use RF chokes!)
+
+  Serial.print(F(   "kP = ")) ;  Serial.print( pid_P, 3 ) ; 
+  Serial.print(F( ", kI = ")) ;  Serial.print( pid_I, 3 ) ; 
+  Serial.print(F( ", kD = ")) ;  Serial.println( pid_D, 3 ) ; 
 
 }
 
 
+void setup() {
+
+  comms_setup();
+  IO_setup();
+  Wire_setup();
+  IMU_setup();
+  T_setup();
+  // demonstrate it:
+  IamAlive() ;
+
+}
   
 boolean lflip = true ;
 
@@ -380,7 +419,7 @@ void flush_out()
 
 // data = { 0x43, 0x0B, 0x0C, <p1>, <v1>, <v2>, <v3>, <v4>, <4 bytes crc>, 0x00 }   
 void set_param(byte* data){
-  Serial.println(F("set_param"));
+  //Serial.println(F("set_param"));
    int param = data[3] ; 
    if (param<1 || param>3) {
      BTserial.println( "WP " + String(param, HEX)) ;
@@ -392,12 +431,13 @@ void set_param(byte* data){
   }
 
 void set_param( int param, float value) {
-    Serial.println( "SP " + param_name[param] + " = " + String(value, DEC)) ;
-    BTserial.println( "SP " + param_name[param] + " = " + String(value, DEC)) ;
+    String msg = "SP " + param_name[param] + " = " + String(value, 3) ;
+    Serial.println( msg ) ;
+    BTserial.println( msg ) ;
     switch (param) {
       case 1: pid_P = value ; break ;
-      case 2: pid_I = value / 100.0; break ;
-      case 3: pid_D = value / 100.0; break ;
+      case 2: pid_I = value ; break ;
+      case 3: pid_D = value ; break ;
     }         
 }
 
@@ -408,8 +448,8 @@ void reset_buffer(){
 
 // COMMS
 int expected_data_len( byte c ) {
-  Serial.print(F("expected len, read: "));
-  Serial.println(c, HEX);
+  //Serial.print(F("expected len, read: "));
+  //Serial.println(c, HEX);
   if (c>max_param_buffer_len) {
     flush_out();
     BTserial.println( F("R:BD0")) ;
@@ -420,11 +460,6 @@ int expected_data_len( byte c ) {
   return READING_SET;
 }
 
-//void printhex( byte* s){
-// for (int i = 0; i < s.length; ++i ) {
-//   print( String.format("%x", s[i]) );
-// }
-//}
 
 // COMMS
 int build_param_data( byte c ) {
@@ -451,13 +486,13 @@ int build_param_data( byte c ) {
    param_buffer[buffer_pos] = 0 ; // null terminated, now buffer_pos == expected_data_len 
    
    if (check_crc( param_buffer, buffer_pos )) {
-       Serial.println(F(" CRC Passed")) ; 
+       Serial.println(F("CRC Passed")) ; 
        return RUN_CMD_BUFFER ; 
    }
    else {
        flush_out();
        BTserial.println( F("R:CRC")) ;
-       Serial.println(F(" Wrong CRC")) ;
+       Serial.println(F("Wrong CRC")) ;
        return WAITING ;       
    }
 }
@@ -475,7 +510,7 @@ void start_buffering(byte c){
 
 // COMMS
 int read_cmd( byte c) {
-      Serial.print(F("cmd: ")); Serial.println(c, DEC);
+      Serial.print(F("cmd: [")); Serial.print(c, HEX); ; Serial.println(F("]")) ;
       switch (c) {
         case STATUS :      
         case START_LOGGING :
@@ -501,7 +536,7 @@ int read_cmd( byte c) {
 }
 
 void telemetry() {    
-    if (LOGGING && t_now != t_last_log) {
+    if (LOGGING && t_now - t_last_log > 200) {
         BTserial.print( F("LOG:") );
         BTserial.print( t_now ); BTserial.print( F(":" ));
         for ( int p=0; p <= data_len; ++p ) { 
@@ -538,7 +573,7 @@ void comms_loop()
     if (BTserial.available())  { 
       delay(1); // wait for buffer fill up 
       char c = BTserial.read() ;
-      Serial.print(F("char read: ")); Serial.println(c, HEX); 
+      //Serial.print(F("char read: ")); Serial.println(c, HEX); 
       switch (COMMST) {
         
         case READING_CMD: COMMST = read_cmd( c) ;           break ;
@@ -558,7 +593,8 @@ void comms_loop()
 }
 
 // COMMS
-int run_cmd( char cmd, byte* data) {
+int run_cmd( byte cmd, byte* data) {
+      Serial.print(F("running cmd [")); Serial.print(cmd, HEX); ; Serial.println(F("]")) ;
       switch (cmd) {
         case STATUS :
           BTserial.println( F("OK: Ready!")) ; 
@@ -585,10 +621,17 @@ int run_cmd( char cmd, byte* data) {
           COMMST = WAITING;
           break ;
         case SHOW_PARAMS : 
+          {
+          // sprintf in the libstc version lite, used for linking in Arduino IDE, do not support %f :( 
+          //char msg[64];
+          //sprintf(msg, "OK: kP = %6.4f, kI = %6.4f, kD = %6.4f, target = %6.4f\n", pid_P, pid_I, pid_D, target) ; 
+          //BTserial.print(msg) ;
           BTserial.print( F("OK: ")) ; 
-          BTserial.print( F(  "kP = ")) ;  BTserial.print( pid_P ) ; 
-          BTserial.print( F(", kI = ")) ;  BTserial.print( pid_I ) ; 
-          BTserial.print( F(", kD = ")) ;  BTserial.println( pid_D ) ; 
+          BTserial.print( F(  "kP = ")) ;  BTserial.print( pid_P, 4) ; 
+          BTserial.print( F(", kI = ")) ;  BTserial.print( pid_I, 4 ) ; 
+          BTserial.print( F(", kD = ")) ;  BTserial.print( pid_D, 4 ) ;
+          BTserial.print( F(", target = ")) ;  BTserial.println( target, 4 ) ;
+          } 
           COMMST = WAITING;
           break ;
         case SET_1PARAM :
@@ -629,16 +672,18 @@ void imu_loop() {
         mpu.resetFIFO();
         BTserial.println(F("FIFO overflow!"));
         Serial.println(F("FIFO overflow!"));
-
-    // otherwise, check for DMP data ready interrupt (this should happen frequently)
-    } else if (mpuIntStatus & 0x02) {
+        return ;
+    }
+    // otherwise, check for DMP data ready interrupt (this should happen frequently) 
+    if (mpuIntStatus & 0x02) {
         // wait for correct available data length, should be a VERY short wait
-        
-        while (fifoCount < packetSize) {
-            fifoCount = mpu.getFIFOCount();
-            Serial.print(".");
+        waiting_for_FIFO = true;
+        while (fifoCount < packetSize ) {
+            fifoCount = mpu.getFIFOCount(); 
+            //Serial.print(".");
         }
-        Serial.println("*");
+        waiting_for_FIFO = false;
+        //Serial.println("*");
         // read a packet from FIFO
         mpu.getFIFOBytes(fifoBuffer, packetSize);
         
@@ -653,24 +698,24 @@ void imu_loop() {
         mpu.dmpGetGyro( &gyro, fifoBuffer) ;
    
         //// 
-        int inc_t = t_now - t_last ;
-        const float alpha = ypr[1] * dg_rad ; // in dg
-        const float error = alpha - target ;
-        int_error += error * inc_t / 1000.0 ; // per s
+        long inc_t = t_now - t_last ;
+        const float alpha = ypr[1] * dg_rad ; // pitch in dg, pve means head's down
+        const float w = - gyro.y / 131.0 ; // 1 dg/s = 131 in register. d_e/d_t = - w
+        const float error = target - alpha ; 
+        int_error += error * (float)inc_t / 1000.0 ; // per s
         
         //const float fb = pid_P * error  + pid_D * gyro.y * 180/M_PI + pid_I * int_error ;
         const float fbp = pid_P * error ;
-        const float fbi = 0; //pid_I * int_error ;
-        const float fbd = pid_D * gyro.y / 131.0 ; // 131 LSB per dg/s, or 1 dg/s = 131 in register
+        const float fbi = pid_I * int_error ;
+        const float fbd = pid_D * w; 
         const float fb = fbp + fbi + fbd ;
-        
-        if (abs(error) > hist ) {
-          const float speed = constrain( 
-                              error > 0 ? 
+        // positive error means go backwards
+        if (fabs(error) > hist ) {
+          const float speed = -constrain( 
+                              fb > 0 ? 
                               map( fb, 0, crash_ang, min_speed, max_speed  ) :
                               map( fb, -crash_ang, 0, -max_speed, -min_speed  ),
                               -max_speed, max_speed );
-          // const float speed =  pid_P*error>0? max_speed : -max_speed 
 
           log_point[0] = alpha; 
           log_point[1] = error; 
@@ -678,6 +723,14 @@ void imu_loop() {
           log_point[3] = fbi;
           log_point[4] = fbd ;
           log_point[5] = speed ;
+
+//          log_point[0] = alpha; 
+//          log_point[1] = error; 
+//          log_point[2] = int_error ;
+//          log_point[3] = w ;
+//          log_point[4] = fb ;
+//          log_point[5] = speed ;
+
             
           moveForward( speed ) ;
           
