@@ -179,19 +179,21 @@ int pos = 105;    // leg pos
 
 // motor velocities
 int max_speed = 250 ; // 120 
-int min_speed = 70 ; // 100 90 
+int min_speed = 85 ; // 100 90 
 float crash_ang = 60.0 ;
 
 // target angle and safe zone. depends on, e.g. kind of batteries used.
 // todo: nest another PID to find the target angle (is the one that gets null ang. vel.)
-float target = 4.9 ; // 1.3 ;//6.5 ; //7.00 ;//5.73; // 4.65 ; // for pos = 105
+ // for pos = 105:
+float target =  6.0 ;  // 4.9 ;  // lipo 400mAh batts
+//float target = 7.0 ;  // standard duracell
 float hist = 0.1 ; // degrees
 
 // kP = 1.5 kI = 0.01 kD = .04
 // pid controler parameters
-float pid_P = .983;// .81 ; // 3.0; 5.5
-float pid_I = 0.0251; // 0.02  .002
-float pid_D = .5; // .002 ;
+float pid_P = .32;// .81 ; // 3.0; 5.5
+float pid_I = 0.001; // 0.02  .002
+float pid_D = .17; // .002 ;
 /////////////////////////////////////////////////////////////////
 
 float int_error = 0 ;
@@ -217,6 +219,7 @@ enum PARAM : byte {
   KP = 1,
   KI = 2,
   KD = 3,
+  TA = 4,
   POS = 10,
   VEL = 20
 };
@@ -244,7 +247,7 @@ const char LF = 10;
 const char CMD = 'C'; 
 
 const int n_params = 5 ;
-String param_name[] = {"", "KP", "KI", "KD", "POS", "VEL"} ;
+String param_name[] = {"", "KP", "KI", "KD", "TA", "POS", "VEL"} ;
 const int data_len = 5;
 float log_point[data_len] ; // t, angle, fbp, fbi, fbd, speed  
 // 
@@ -377,7 +380,8 @@ void IamAlive() {
 
   Serial.print(F(   "kP = ")) ;  Serial.print( pid_P, 3 ) ; 
   Serial.print(F( ", kI = ")) ;  Serial.print( pid_I, 3 ) ; 
-  Serial.print(F( ", kD = ")) ;  Serial.println( pid_D, 3 ) ; 
+  Serial.print(F( ", kD = ")) ;  Serial.print( pid_D, 3 ) ; 
+  Serial.print(F( ", TA = ")) ;  Serial.println( target, 3 ) ; 
 
 }
 
@@ -421,24 +425,25 @@ void flush_out()
 void set_param(byte* data){
   //Serial.println(F("set_param"));
    int param = data[3] ; 
-   if (param<1 || param>3) {
-     BTserial.println( "WP " + String(param, HEX)) ;
-     return ;            
-    }
-    long vint = data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7] ;
-    float value = vint/1000.0;
-    set_param( param, value) ;
+   long vint = data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7] ;
+   float value = vint/1000.0;
+   set_param( param, value) ;
   }
 
 void set_param( int param, float value) {
+
+    switch (param) {
+      case KP: pid_P = value ; break ;
+      case KI: pid_I = value ; break ;
+      case KD: pid_D = value ; break ;
+      case TA: target = value ; break ;
+      default:      
+          BTserial.println( "WP " + String(param, HEX)) ;
+          return ;  
+    }    
     String msg = "SP " + param_name[param] + " = " + String(value, 3) ;
     Serial.println( msg ) ;
-    BTserial.println( msg ) ;
-    switch (param) {
-      case 1: pid_P = value ; break ;
-      case 2: pid_I = value ; break ;
-      case 3: pid_D = value ; break ;
-    }         
+    BTserial.println( msg ) ;    
 }
 
 void reset_buffer(){
@@ -549,7 +554,7 @@ void telemetry() {
 }
 
 
-COMMS last_COMMST=-1;
+COMMS last_COMMST=(COMMS)-1;
 
 // process incomming bytes, one by one
 void comms_loop()
@@ -576,10 +581,10 @@ void comms_loop()
       //Serial.print(F("char read: ")); Serial.println(c, HEX); 
       switch (COMMST) {
         
-        case READING_CMD: COMMST = read_cmd( c) ;           break ;
-        case READING_CRC: COMMST = build_param_data(c) ;    break ;
-        case READING_LEN: COMMST = expected_data_len(c);    break ;
-        case READING_SET: COMMST = build_param_data(c);     break ;
+        case READING_CMD: COMMST = (COMMS)read_cmd( c) ;           break ;
+        case READING_CRC: COMMST = (COMMS)build_param_data(c) ;    break ;
+        case READING_LEN: COMMST = (COMMS)expected_data_len(c);    break ;
+        case READING_SET: COMMST = (COMMS)build_param_data(c);     break ;
         //case RUN_CMD_BUFFER:     COMMST = run_cmd(current_cmd, param_buffer);    break ;
         case WAITING: if (c == CMD) { COMMST = READING_CMD ;  timeout = t_now + 1000 ; break ;}
         default: Serial.print("{"); Serial.print(c, HEX); Serial.println("}");
@@ -587,7 +592,7 @@ void comms_loop()
     }
     
     if (COMMST == RUN_CMD_BUFFER ) {
-        COMMST = run_cmd(current_cmd, param_buffer); 
+        COMMST = (COMMS)run_cmd(current_cmd, param_buffer); 
     }
     //digitalWrite(BTLEDPin, LOW);
 }
@@ -644,6 +649,7 @@ int run_cmd( byte cmd, byte* data) {
           COMMST = WAITING;
           break ; 
       }
+      BTserial.println(F(".")) ; // read buffer
       return COMMST ;
 }
 
@@ -747,7 +753,6 @@ void imu_loop() {
           
           fullStop();
         }
-        //Serial.println(alpha, 2);
     }
 }
 
@@ -760,8 +765,8 @@ void test(int pos, int speed) {
 void zero(int pos) {
     Serial.println("pos: " + String(pos));
     Lservo.write(180-pos); // goto pos mark
-    Rservo.write(pos-11);     // both legs
-    delay(15);             // wait 15ms for the servo to reach the position
+    Rservo.write(pos-11);  // both legs, 180 and 11 are the limits of each side
+    delay(15);             // wait 15ms for the servos to reach the position
   }
 
 void sweep() {
@@ -868,9 +873,6 @@ void rotateRight(int speed)
 
 void turn( int speedL, int speedR)
 {
-     #ifdef DEBUG
-      Serial.println( "Turn(  " + String(speedL) + ", " + String(speedR) + ")");
-    #endif
       motorForward(pinMotorR, speedR) ;
       motorForward(pinMotorL, speedL) ;
 }
@@ -910,7 +912,7 @@ float fscale( float originalMin, float originalMax, float newBegin, float newEnd
   if (curve < -10) curve = -10;
 
   curve = (curve * -.1) ; // - invert and scale - this seems more intuitive - postive numbers give more weight to high end on output
-  curve = pow(10, curve); // convert linear scale into lograthimic exponent for other pow function
+  curve = pow(10, curve); // convert linear scale into logarithmic exponent for other pow function
 
   /*
    Serial.println(curve * 100, DEC);   // multply by 100 to preserve resolution  

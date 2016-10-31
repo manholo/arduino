@@ -1,4 +1,5 @@
 
+import java.util.*;
 import controlP5.*;
 import processing.serial.*;
 
@@ -105,16 +106,17 @@ interface PARAM {
   KP = 1,
   KI = 2,
   KD = 3,
+  TA = 4,
   POS = 10,
   VEL = 20 ;
 }
 final int param_len = 5 ;
-String param_names[] = {"", "KP", "KI", "KD", "POS", "VEL" } ;
+String param_names[] = {"", "KP", "KI", "KD", "TA", "POS", "VEL" } ;
 
 
 final int data_len = 5 ;
 String log_point_names[] = {"alpha", "error", "fbp", "fbi", "fbd", "speed" } ;
-float log_point_scale[] = { 1, 1, 1, 10, 100, 0.1 } ;
+float log_point_scale[] = { 1, 1, 1, 10, 10, 0.15 } ;
 color log_point_color[] = { color(200,200,200),
                             color(250,20,20),
                             color(20,20,250), color(200,0,250), color(60,200,250),
@@ -175,14 +177,9 @@ void setup() {
   noStroke();
 
   log = createWriter("telemetry.txt");
-  // Print a list of the serial ports, for debugging purposes:
-  printArray(Serial.list());
-  //
-  String portName = "/dev/tty.VALKYRIE-DevB"  ; // Serial.list()[5]; 
-  valkyrie = new Serial(this, portName, 115200);
-  valkyrie.bufferUntil(LF); 
   
   cp5 = new ControlP5(this);
+       
   text = new Textlabel[data_len+1];
   
   for (int l =0 ; l<=data_len; ++l) { //<>//
@@ -196,14 +193,32 @@ void setup() {
   };
        
   // add a vertical slider for target angle
+  cp5.addSlider("target_shade")
+     .setPosition(50,300)
+     .setSize(2,300)
+     .setRange(-10,10)
+     .setNumberOfTickMarks(21)
+     //.setScrollSensitivity(.01)
+     .setValue(0)
+     ;  
   cp5.addSlider("target")
      .setPosition(50,300)
      .setSize(20,300)
-     .setRange(-10,10)
-     .setNumberOfTickMarks(21)
+     .setRange(10,-10)
+     //.setNumberOfTickMarks(201)
+     .setScrollSensitivity(.001)
      .setValue(0)
      ;                              
-                                
+  cp5.getController("target_shade")
+     .getValueLabel()
+     .alignX(ControlP5.LEFT_OUTSIDE)
+     .setPaddingX(15)
+     ;
+  cp5.getController("target_shade")
+     .getCaptionLabel()
+     .hide()
+     ;
+  
   kPKnob = cp5.addKnob("kP")
                .setRange(minkP, maxkP)
                .setValue(kP)
@@ -215,6 +230,8 @@ void setup() {
                .setResolution(1000)
                //.setViewStyle(Knob.ARC)
                ;
+  kPKnob.getValueLabel().setFont(createFont("Georgia",18));
+  
   kIKnob = cp5.addKnob("kI")
                .setRange(minkI, maxkI)
                .setValue(kI)
@@ -225,6 +242,8 @@ void setup() {
                .setDragDirection(Knob.VERTICAL)
                .setResolution(1000)
                ;
+  kIKnob.getValueLabel().setFont(createFont("Georgia",18));           
+  
   kDKnob = cp5.addKnob("kD")
                .setRange(minkD, maxkD)
                .setValue(kD)
@@ -235,17 +254,7 @@ void setup() {
                .setDragDirection(Knob.VERTICAL)
                .setResolution(1000)
                ;  
-
- //checkbox = cp5.addCheckBox("checkBox")
- //               .setPosition(460, 300)
- //               .setSize(40, 40)
- //               .setItemsPerRow(1)
- //               .setSpacingColumn(30)
- //               .setSpacingRow(20)
- //               .addItem("LIGHTS", 0)
- //               .addItem("LOG", 0)
- //               ;  
- 
+ kDKnob.getValueLabel().setFont(createFont("Georgia",18));
  
  lightscb = cp5.addCheckBox("lightscb")
                 .setPosition(460, 300)
@@ -284,10 +293,19 @@ void setup() {
     plot.setColors(log_point_names[p], log_point_color[p]);
     plot.setData(log_point_names[p], new float[100]);
   }
+
+  cp5.addScrollableList("connection")
+     .setPosition(50, 20)
+     .setSize(200, 100)
+     .setBarHeight(20)
+     .setItemHeight(20)
+     .addItems(Serial.list())
+     // .setType(ScrollableList.LIST) // currently supported DROPDOWN and LIST
+     ;
+
   
   
-  
-  if (!valkyrie_connected) command( CMD.STATUS ) ;
+  //if (!valkyrie_connected) command( CMD.STATUS ) ;
  
 
 }
@@ -358,6 +376,19 @@ void serialEvent(Serial valkyrie) {
   }
 }
 
+
+void connection(int n) {
+
+  String portName = String.class.cast((cp5.get(ScrollableList.class, "connection").getItem(n).get("text")));
+  println("connecting to ", portName);
+  valkyrie = new Serial(this, portName, 115200);
+  valkyrie.bufferUntil(LF); 
+  valkyrie_connected = false ;
+  command( CMD.STATUS ) ;
+  
+}
+
+
 void kP(float theValue) {
   if (valkyrie_connected) {
     println("req KP = " + theValue);
@@ -379,6 +410,14 @@ void kD(float theValue) {
   }
 }
 
+
+void target(float theValue) {
+  if (valkyrie_connected) {
+    println("req TA = " + theValue);
+    set_param( PARAM.TA, theValue );
+  }
+}
+
 void lightscb(float[] a) {
   if (valkyrie_connected) {
     if (a[0]>0) command(CMD.LIGHTS_ON); else command(CMD.LIGHTS_OFF);
@@ -395,7 +434,9 @@ void keyPressed() {
   switch(key) {
     case('1'): command( CMD.STATUS ) ;break;
     case('2'): command( CMD.SHOW_PARAMS ) ;break;
-  //  case('2'): break;
+    case('3'): /*change content of the Conection List */
+      cp5.get(ScrollableList.class, "connection").setItems(Serial.list());
+      break;
   //  case('3'): break;
   }
   
