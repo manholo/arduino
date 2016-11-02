@@ -179,7 +179,7 @@ int pos = 105;    // leg pos
 
 // motor velocities
 int max_speed = 250 ; // 120 
-int min_speed = 85 ; // 100 90 
+int min_speed = 70 ; // 100 90 
 float crash_ang = 60.0 ;
 
 // target angle and safe zone. depends on, e.g. kind of batteries used.
@@ -220,9 +220,12 @@ enum PARAM : byte {
   KI = 2,
   KD = 3,
   TA = 4,
+  LS = 5,
+  HS = 6,
   POS = 10,
   VEL = 20
 };
+String param_name[] = {"", "KP", "KI", "KD", "TA", "LS", "HS", "POS", "VEL"} ;
 
 enum COMMS : byte {
   WAITING,
@@ -247,7 +250,7 @@ const char LF = 10;
 const char CMD = 'C'; 
 
 const int n_params = 5 ;
-String param_name[] = {"", "KP", "KI", "KD", "TA", "POS", "VEL"} ;
+
 const int data_len = 5;
 float log_point[data_len] ; // t, angle, fbp, fbi, fbd, speed  
 // 
@@ -433,10 +436,12 @@ void set_param(byte* data){
 void set_param( int param, float value) {
 
     switch (param) {
-      case KP: pid_P = value ; break ;
-      case KI: pid_I = value ; break ;
-      case KD: pid_D = value ; break ;
-      case TA: target = value ; break ;
+      case KP: pid_P     = value ; break ;
+      case KI: pid_I     = value ; break ;
+      case KD: pid_D     = value ; break ;
+      case TA: target    = value ; break ;
+      case LS: min_speed = value ; break ;
+      case HS: max_speed = value ; break ;      
       default:      
           BTserial.println( "WP " + String(param, HEX)) ;
           return ;  
@@ -572,6 +577,7 @@ void comms_loop()
        Serial.println( "timeout: " + String(timeout));
        flush_out();    
        BTserial.println( F("R:TO") ) ;
+       timeout = t_now + 1000 ;
        COMMST = WAITING ;        
     }
 

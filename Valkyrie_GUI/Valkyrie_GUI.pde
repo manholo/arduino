@@ -1,7 +1,12 @@
 
 import java.util.*;
+import java.io.*; 
 import controlP5.*;
 import processing.serial.*;
+import themidibus.*; 
+import javax.sound.midi.MidiMessage;
+
+MidiBus midibus; // The MidiBus
 
 // code originally from https://wiki.wxwidgets.org/Development:_Small_Table_CRC
 
@@ -59,25 +64,30 @@ float kI = .01;
 float kD = .5; 
  
 float minkP = 0 ;
-float maxkP = 5 ;
+float maxkP = 10 ;
 
 float minkI = 0 ;
 float maxkI = 1 ;
 
 float minkD = 0 ;
-float maxkD = 2 ;
+float maxkD = 100 ;
 
-boolean heart_beat = false ;
+float minTA = -15 ;
+float maxTA = 15 ;
+
+float minSP = 0 ;
+float maxSP = 250 ;
 
 Textlabel alphaText;
 Textlabel fpdText;
 Textlabel[] text;
+Slider taSlide;
 Knob kPKnob;
 Knob kDKnob;
 Knob kIKnob;
 Knob posKnob;
 Knob targetKnob;
-CheckBox lightscb, logcb;
+CheckBox lightscb, logcb, anlzcb;
 Textarea textarea;
 Chart plot;
 Println console;
@@ -107,11 +117,13 @@ interface PARAM {
   KI = 2,
   KD = 3,
   TA = 4,
+  LS = 5,
+  HS = 6,
   POS = 10,
   VEL = 20 ;
 }
 final int param_len = 5 ;
-String param_names[] = {"", "KP", "KI", "KD", "TA", "POS", "VEL" } ;
+String param_names[] = {"", "KP", "KI", "KD", "TA", "LS", "HS", "POS", "VEL" } ;
 
 
 final int data_len = 5 ;
@@ -126,6 +138,7 @@ char last_cmd = CMD.NONE ;
 byte[] last_payload ;
 boolean waiting_line = false ;
 long wait_timeout ;
+long midi_debounce ; // do not send any param update from midi until some time has passed since last midi message
 
 
 byte[] append_byte( byte[] payload, int p ) {
@@ -165,7 +178,8 @@ void printhex( byte[] s){
  println("");
 }
 void resend( ) {
-  printhex(last_payload);
+  //printhex(last_payload);
+  println("!");
   valkyrie.write( last_payload );         
   waiting_line = true ;
   wait_timeout = millis() + 500 ;
@@ -175,14 +189,16 @@ void setup() {
   size(550, 650);
   smooth();
   noStroke();
+  
 
   log = createWriter("telemetry.txt");
   
+  midibus = new MidiBus(this, "nanoKONTROL", "");
   cp5 = new ControlP5(this);
        
   text = new Textlabel[data_len+1];
   
-  for (int l =0 ; l<=data_len; ++l) { //<>//
+  for (int l =0 ; l<=data_len; ++l) {
         println(log_point_names[l]);
         text[l] = cp5.addTextlabel(log_point_names[l])
                  .setText("--")
@@ -196,19 +212,11 @@ void setup() {
   cp5.addSlider("target_shade")
      .setPosition(50,300)
      .setSize(2,300)
-     .setRange(-10,10)
-     .setNumberOfTickMarks(21)
+     .setRange(15,-15)
+     .setNumberOfTickMarks(31)
      //.setScrollSensitivity(.01)
      .setValue(0)
      ;  
-  cp5.addSlider("target")
-     .setPosition(50,300)
-     .setSize(20,300)
-     .setRange(10,-10)
-     //.setNumberOfTickMarks(201)
-     .setScrollSensitivity(.001)
-     .setValue(0)
-     ;                              
   cp5.getController("target_shade")
      .getValueLabel()
      .alignX(ControlP5.LEFT_OUTSIDE)
@@ -218,6 +226,15 @@ void setup() {
      .getCaptionLabel()
      .hide()
      ;
+
+  taSlide = cp5.addSlider("target")
+               .setPosition(50,300)
+               .setSize(20,300)
+               .setRange(15,-15)
+             //.setNumberOfTickMarks(201)
+               .setScrollSensitivity(.001)
+               .setValue(0)
+               ;                              
   
   kPKnob = cp5.addKnob("kP")
                .setRange(minkP, maxkP)
@@ -243,7 +260,7 @@ void setup() {
                .setResolution(1000)
                ;
   kIKnob.getValueLabel().setFont(createFont("Georgia",18));           
-  
+
   kDKnob = cp5.addKnob("kD")
                .setRange(minkD, maxkD)
                .setValue(kD)
@@ -267,8 +284,14 @@ void setup() {
                 .setSize(40, 40)
                 .addItem("LOG", 0)
                 ;  
+                
+ anlzcb = cp5.addCheckBox("anlz")
+                .setPosition(460, 440)
+                .setSize(40, 40)
+                .addItem("ANLZ", 0)
+                ;  
  
-  textarea = cp5.addTextarea("txt")
+ textarea = cp5.addTextarea("txt")
                   .setPosition(100, 430)
                   .setSize(340, 210)
                   .setFont(createFont("", 10))
@@ -303,13 +326,15 @@ void setup() {
      // .setType(ScrollableList.LIST) // currently supported DROPDOWN and LIST
      ;
 
-  
+  MidiBus.list();
+
   
   //if (!valkyrie_connected) command( CMD.STATUS ) ;
  
 
 }
 
+boolean heart_beat = false ;
 void draw() {
   background(background);
 
@@ -317,7 +342,7 @@ void draw() {
   else fill(0,0,0);
   ellipse(50,50,5,5);
   heart_beat = false ;
-  //if (valkyrie_connected && waiting_line && millis() > wait_timeout) resend() ;
+  if (valkyrie_connected && waiting_line && millis() > wait_timeout) resend() ;
 }
 
 
@@ -427,6 +452,50 @@ void lightscb(float[] a) {
 void logcb(float[] a) {
   if (valkyrie_connected) {
     if (a[0]>0) command(CMD.START_LOGGING); else command(CMD.STOP_LOGGING);
+  }
+}
+
+
+void anlz(float[] a) {
+  //if (valkyrie_connected) { //<>//
+    String[] cmd = { "python",  sketchPath("plot.py"),  sketchPath("telemetry.txt") } ;
+    //exec(cmd);
+
+    try {
+      Runtime rt = Runtime.getRuntime(); 
+      Process p = rt.exec(cmd);
+      //int st = p.waitFor();
+      BufferedReader input = new BufferedReader(new InputStreamReader(p.getErrorStream()));
+      //println(st);
+      String line = null;
+      while ((line = input.readLine()) != null) {
+         System.out.println(line);
+      }
+    }
+    catch(Exception e) {
+      e.printStackTrace();
+    }
+
+    //if (a[0]>0) launch("python plot.py");
+  //}
+}
+
+
+void controllerChange(int channel, int number, int value) {
+  // Receive a controllerChange. No println() to cp5 console here! cp5 event dispatcher gets confused sometimes 
+  // nanoKontrol on channel 15
+  if (channel!=15) return ;
+  switch (number) {
+    case 1:  { float v = map(value, 0, 127, minkP, maxkP); kPKnob.setValue(v);  break; } // the knobs and slider will do the rest
+    case 2:  { float v = map(value, 0, 127, minkI, maxkI); kIKnob.setValue(v);  break; }
+    case 3:  { float v = map(value, 0, 127, minkD, maxkD); kDKnob.setValue(v);  break; }
+    case 10: { float v = map(value, 0, 127, maxTA, minTA); taSlide.setValue(v); break; }
+    case 11: { float v = map(value, 0, 127, minSP, maxSP);                    ; set_param(PARAM.HS, v); break; }
+    case 12: { float v = map(value, 0, 127, minSP, maxSP);                    ; set_param(PARAM.LS, v); break; }
+    case 19: logcb.toggle(0); logcb(logcb.getArrayValue()); break;
+    case 20: lightscb.toggle(0); lightscb(lightscb.getArrayValue()); break;
+    case 28: command( CMD.STATUS ) ; break;
+    case 29: command( CMD.SHOW_PARAMS ) ; break;
   }
 }
 

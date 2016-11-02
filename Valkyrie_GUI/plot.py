@@ -1,10 +1,13 @@
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+fn = sys.argv[1]
+
 plt.style.use('ggplot')
 
-t, alpha, error, fp, fi, fd, speed = np.loadtxt("telemetry.csv", delimiter=":", usecols=(1,2,3,4,5,6,7), unpack=True)
+t, alpha, error, fp, fi, fd, speed = np.loadtxt(fn, delimiter=":", usecols=(1,2,3,4,5,6,7), unpack=True)
 
 t = t - t[0]
 
