@@ -178,7 +178,7 @@ void printhex( byte[] s){
  println("");
 }
 void resend( ) {
-  //printhex(last_payload);
+  printhex(last_payload);
   println("!");
   valkyrie.write( last_payload );         
   waiting_line = true ;
@@ -359,9 +359,9 @@ void serialEvent(Serial valkyrie) {
     String points[] = response.split(":") ; 
     for(int p=0; p<= data_len; ++p) {
       float v = float(points[p+2]);
-      if (Float.isNaN(v)) v=0;
+      if (Float.isNaN(v)) v=0; else v/=100.0 ;
       plot.push(log_point_names[p], v * log_point_scale[p] );
-      text[p].setText(points[p+2]);  
+      text[p].setText(str(v));  
     }
 
     return; 
