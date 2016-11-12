@@ -64,7 +64,7 @@ float kI = .01;
 float kD = .5; 
  
 float minkP = 0 ;
-float maxkP = 10 ;
+float maxkP = 20 ;
 
 float minkI = 0 ;
 float maxkI = 1 ;
@@ -87,7 +87,7 @@ Knob kDKnob;
 Knob kIKnob;
 Knob posKnob;
 Knob targetKnob;
-CheckBox lightscb, logcb, anlzcb;
+CheckBox lightscb, logcb, anlzcb, paniccb;
 Textarea textarea;
 Chart plot;
 Println console;
@@ -108,7 +108,7 @@ interface CMD {
   START_LOGGING = 30,
   STOP_LOGGING = 35,
   LEAN = 40,
-  HALT = 100  ;
+  PANIC = 100  ;
 } ;
 
 interface PARAM {
@@ -128,7 +128,7 @@ String param_names[] = {"", "KP", "KI", "KD", "TA", "LS", "HS", "POS", "VEL" } ;
 
 final int data_len = 5 ;
 String log_point_names[] = {"alpha", "error", "fbp", "fbi", "fbd", "speed" } ;
-float log_point_scale[] = { 1, 1, 1, 10, 10, 0.15 } ;
+float log_point_scale[] = { .3, .3, 1, 10, 10, 0.15 } ;
 color log_point_color[] = { color(200,200,200),
                             color(250,20,20),
                             color(20,20,250), color(200,0,250), color(60,200,250),
@@ -166,6 +166,7 @@ void command( char cmd ) {
 }
 
 void set_param( int p, float value ) {
+  println(String.format("req %s = %5.2f", param_names[p], value));
   last_payload = append_crc( append_int( String.format("C%c%c%c", CMD.SET_PARAM, 12, (byte)p ).getBytes(), int(value * 1000))) ;
   last_cmd = CMD.SET_PARAM ;
   resend();
@@ -212,7 +213,7 @@ void setup() {
   cp5.addSlider("target_shade")
      .setPosition(50,300)
      .setSize(2,300)
-     .setRange(15,-15)
+     .setRange(maxTA, minTA)
      .setNumberOfTickMarks(31)
      //.setScrollSensitivity(.01)
      .setValue(0)
@@ -230,7 +231,7 @@ void setup() {
   taSlide = cp5.addSlider("target")
                .setPosition(50,300)
                .setSize(20,300)
-               .setRange(15,-15)
+               .setRange(maxTA, minTA)
              //.setNumberOfTickMarks(201)
                .setScrollSensitivity(.001)
                .setValue(0)
@@ -290,7 +291,11 @@ void setup() {
                 .setSize(40, 40)
                 .addItem("ANLZ", 0)
                 ;  
- 
+ paniccb = cp5.addCheckBox("panic")
+                .setPosition(460, 510)
+                .setSize(40, 40)
+                .addItem("PANIC", 0)
+                ;   
  textarea = cp5.addTextarea("txt")
                   .setPosition(100, 430)
                   .setSize(340, 210)
@@ -371,6 +376,7 @@ void serialEvent(Serial valkyrie) {
   switch (last_cmd) {
     case CMD.STATUS:
       if (response.startsWith("OK")) valkyrie_connected = true ;
+    case CMD.PANIC:
     case CMD.LIGHTS_ON:
     case CMD.LIGHTS_OFF:
     case CMD.START_LOGGING:
@@ -416,21 +422,21 @@ void connection(int n) {
 
 void kP(float theValue) {
   if (valkyrie_connected) {
-    println("req KP = " + theValue);
+    //println("req KP = " + theValue);
     set_param( PARAM.KP, theValue );
   } 
 }
 
 void kI(float theValue) {
   if (valkyrie_connected) {
-    println("req KI = " + theValue);
+   // println("req KI = " + theValue);
     set_param( PARAM.KI, theValue );
   }
 }
 
 void kD(float theValue) {
   if (valkyrie_connected) {
-    println("req KD = " + theValue);
+    //println("req KD = " + theValue);
     set_param( PARAM.KD, theValue );
   }
 }
@@ -438,7 +444,7 @@ void kD(float theValue) {
 
 void target(float theValue) {
   if (valkyrie_connected) {
-    println("req TA = " + theValue);
+    //println("req TA = " + theValue);
     set_param( PARAM.TA, theValue );
   }
 }
@@ -455,6 +461,11 @@ void logcb(float[] a) {
   }
 }
 
+void paniccb(float[] a) {
+  if (valkyrie_connected) {
+    if (a[0]>0) command(CMD.PANIC); //else command(CMD.STATUS);
+  }
+}
 
 void anlz(float[] a) {
   //if (valkyrie_connected) { //<>//
@@ -494,8 +505,10 @@ void controllerChange(int channel, int number, int value) {
     case 12: { float v = map(value, 0, 127, minSP, maxSP);                    ; set_param(PARAM.LS, v); break; }
     case 19: logcb.toggle(0); logcb(logcb.getArrayValue()); break;
     case 20: lightscb.toggle(0); lightscb(lightscb.getArrayValue()); break;
-    case 28: command( CMD.STATUS ) ; break;
+    //case 28: command( CMD.STATUS ) ; break;
     case 29: command( CMD.SHOW_PARAMS ) ; break;
+    case 38: if (value>0) command( CMD.STATUS ) ; break;
+    case 41: paniccb.toggle(0); paniccb(paniccb.getArrayValue()); break;
   }
 }
 

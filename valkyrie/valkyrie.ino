@@ -133,7 +133,7 @@ SoftwareSerial BTserial(rxPin, txPin); // RX | TX
 
 
 bool LOGGING = false ;   // enable logging to GUI
-const bool RUN = true ;  // enable motors
+bool RUN = false ;        // enable motors
 
 /// timming
 unsigned long t_now = 0;
@@ -153,9 +153,9 @@ int crash_ang = 60 ;
 // target angle and safe zone. depends on, e.g. kind of batteries used.
 // todo: nest another PID to find the target angle (is the one that gets null ang. vel.)
 // for pos = 105:
-float target =  6.0 ;  // 4.9 ;  // lipo 400mAh batts
+float target =  4.5 ;  // 4.9 ;  // lipo 400mAh batts
 //float target = 7.0 ;  // standard duracell
-
+//float target =  -80.0 ;
 
 // kP = 1.5 kI = 0.01 kD = .04
 // pid controler parameters
@@ -164,6 +164,7 @@ float pid_I = 0.001; // 0.02  .002
 float pid_D = .17; // .002 ;
 
 float int_error = 0 ;
+float speed_int_error = 0 ;
 /////////////////////////////////////////////////////////////////
 
 
@@ -177,9 +178,9 @@ enum CMD : byte {
   SET_1PARAM = 11,
   STATUS = 20,
   START_LOGGING = 30,
-  STOP_LOGGING = 35 //,
-                 //LEAN = 40,
-                 //HALT = 100
+  STOP_LOGGING = 35,
+  //LEAN = 40,
+  PANIC = 100
 } ;
 
 enum PARAM : byte {
@@ -380,7 +381,7 @@ void flush_out()
 void set_param(byte* data) {
   //Serial.println(F("set_param"));
   int param = data[3] ;
-  long vint = data[4] << 24 | data[5] << 16 | data[6] << 8 | data[7] ;
+  long vint = (long)((uint32_t)data[4] << 24 | (uint32_t)data[5] << 16 | (uint32_t)data[6] << 8 | (uint32_t)data[7] );
   float value = vint / 1000.0;
   set_param( param, value) ;
 }
@@ -484,6 +485,7 @@ int read_cmd( byte c) {
 #endif
   switch (c) {
     case STATUS :
+    case PANIC :
     case START_LOGGING :
     case STOP_LOGGING :
     case LIGHTS_ON :
@@ -575,6 +577,12 @@ int run_cmd( byte* data) {
   switch (cmd) {
     case STATUS :
       BTserial.println( F("OK: Ready!")) ;
+      if (!RUN) { RUN = true; IamAlive(); }  
+      break ;
+    case PANIC :
+      fullStop();
+      RUN = false ;
+      BTserial.println( F("OK: SHTDN")) ;
       break ;
     case START_LOGGING :
       BTserial.println( F("OK: TL on")) ;
@@ -639,15 +647,21 @@ void imu_loop() {
     fifoCount -= packetSize;
 
     // orientation/motion vars
-    Quaternion q;           // [w, x, y, z]         quaternion container
-    VectorInt16 gyro;       // [x, y, z]            gyro angular velocity
-    VectorFloat gravity;    // [x, y, z]            gravity vector
-    float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
+    Quaternion q;                       // [w, x, y, z]         quaternion container
+    VectorInt16 gyro, acel_raw, acel;   // [x, y, z]            gyro angular velocity, and acceleration
+    VectorFloat gravity;                // [x, y, z]            gravity vector
+    float ypr[3];                       // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 
     mpu.dmpGetQuaternion(&q, fifoBuffer);
     mpu.dmpGetGravity(&gravity, &q);
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
     mpu.dmpGetGyro( &gyro, fifoBuffer) ;
+    mpu.dmpGetAccel( &acel_raw, fifoBuffer) ;
+    mpu.dmpGetLinearAccel( &acel, &acel_raw, &gravity);
+    
+    //static boolean tflip = false ;
+    //boolean flip = int(millis()/ 500) % 2;
+    //if (flip != tflip ) { Serial.print(acel.x) ; Serial.print(", ") ;  Serial.print(acel.y) ; Serial.print(", ") ; Serial.println(acel.z) ; tflip = flip ; }
 
     ///
     const float dg_rad = 180 / M_PI ;
@@ -656,6 +670,8 @@ void imu_loop() {
     long inc_t = t_now - t_last ;
     const float alpha = ypr[1] * dg_rad ; // pitch in dg, pve means head's down
     const float w = - gyro.y / 131.0 ; // 1 dg/s = 131 in register. d_e/d_t = - w
+    const float ax = - acel.x * 9.8 / 8192.0 ; // m/s2
+    
     const float error = target - alpha ;
     int_error += error * (float)inc_t / 1000.0 ; // per s
 
@@ -668,12 +684,16 @@ void imu_loop() {
     // log feedbacks
     if (LOGGING) {
       log_point[0] = 100 * alpha;
-      log_point[1] = 100 * error;
+      log_point[1] = 100 * target;
       log_point[2] = 100 * fbp ;
       log_point[3] = 100 * fbi;
       log_point[4] = 100 * fbd ;
       log_point[5] = 0 ;  // speed
     }
+    const float vkP = .0;
+    const float vkI = .0;
+    const float vkD = .0;
+    float fbta ; 
     // positive error means go backwards
     if (fabs(error) > hist ) {
       const float speed = -constrain(
@@ -684,16 +704,27 @@ void imu_loop() {
 
       if (LOGGING) log_point[5] = 100 * speed ;
       moveForward( speed ) ;
+      
+          
+      const float ta_speed = 0 ;
+      const float speed_error = ta_speed - speed ;
+      speed_int_error += speed_error  * (float)inc_t / 1000.0 ;
+      fbta = vkP * speed_error  + vkD * ax  + vkI * speed_int_error ;
     }
     else {
       int_error = 0 ;  // unwind
       fullStop();
+      
+      fbta = vkP * ax  +  vkI * speed_int_error ;
     }
+    target -= fbta  ;
+    //Serial.println(target); 
   }
 }
 
 
 void zero(int pos) {
+  if (!RUN) return ;
   Serial.print(F("pos: ")); Serial.println(pos);
   Lservo.write(180 - pos); // goto pos mark
   Rservo.write(pos - 11); // both legs, 180 and 11 are the limits of each side
