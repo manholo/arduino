@@ -59,18 +59,18 @@ int background = color(0,0,0);
 int bgcolor;           // Background color
 int fgcolor;           // Fill color
 
-float kP = .98;
-float kI = .01; 
-float kD = .5; 
+float kP = .0;
+float kI = .00; 
+float kD = .0; 
  
 float minkP = 0 ;
-float maxkP = 20 ;
+float maxkP = 1 ;
 
 float minkI = 0 ;
 float maxkI = 1 ;
 
 float minkD = 0 ;
-float maxkD = 100 ;
+float maxkD = 1 ;
 
 float minTA = -15 ;
 float maxTA = 15 ;
@@ -194,7 +194,9 @@ void setup() {
 
   log = createWriter("telemetry.txt");
   
-  midibus = new MidiBus(this, "nanoKONTROL", "");
+  //midibus = new MidiBus(this, "nanoKONTROL", "");
+  midibus = new MidiBus(this,"SLIDER/KNOB", "");
+  
   cp5 = new ControlP5(this);
        
   text = new Textlabel[data_len+1];
@@ -493,6 +495,7 @@ void anlz(float[] a) {
 
 
 void controllerChange(int channel, int number, int value) {
+  //println(String.format("CH%d, CTRL %d = %d", channel, number, value)) ;
   // Receive a controllerChange. No println() to cp5 console here! cp5 event dispatcher gets confused sometimes 
   // nanoKontrol on channel 15
   if (channel!=15) return ;

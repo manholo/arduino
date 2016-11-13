@@ -153,15 +153,15 @@ int crash_ang = 60 ;
 // target angle and safe zone. depends on, e.g. kind of batteries used.
 // todo: nest another PID to find the target angle (is the one that gets null ang. vel.)
 // for pos = 105:
-float target =  4.5 ;  // 4.9 ;  // lipo 400mAh batts
+float target =  7.0 ;  // 4.9 ;  // lipo 400mAh batts
 //float target = 7.0 ;  // standard duracell
 //float target =  -80.0 ;
 
 // kP = 1.5 kI = 0.01 kD = .04
 // pid controler parameters
-float pid_P = .32;// .81 ; // 3.0; 5.5
-float pid_I = 0.001; // 0.02  .002
-float pid_D = .17; // .002 ;
+float pid_P = 0.0;// .81 ; // 3.0; 5.5
+float pid_I = 0.0; // 0.02  .002
+float pid_D = 0.0; // .002 ;
 
 float int_error = 0 ;
 float speed_int_error = 0 ;
@@ -252,18 +252,18 @@ void IMU_setup() {
   }
 
   // gyro offsets computed with MPU6050_calibration.ino
-  mpu.setXGyroOffset(95);
-  mpu.setYGyroOffset(10);
-  mpu.setZGyroOffset(-10);
-  mpu.setXAccelOffset(-2441);
-  mpu.setYAccelOffset(-2070);
-  mpu.setZAccelOffset(991);
-
+  mpu.setXAccelOffset(-2403);
+  mpu.setYAccelOffset(-1970);
+  mpu.setZAccelOffset(970);
+  mpu.setXGyroOffset(92);
+  mpu.setYGyroOffset(9);
+  mpu.setZGyroOffset(-14);
+  
   // 0 = +/- 250 degrees/sec
   // 1 = +/- 500 degrees/sec
   // 2 = +/- 1000 degrees/sec
   // 3 =  +/- 2000 degrees/sec
-  mpu.setFullScaleGyroRange(0);
+  mpu.setFullScaleGyroRange(3); // "DMP sensor fusion works only with gyro at +-2000dps and accel +-2G" [mllite_test.c, l. 967]
   // 0 = +/- 2g
   // 1 = +/- 4g
   // 2 = +/- 8g
@@ -665,7 +665,7 @@ void imu_loop() {
 
     ///
     const float dg_rad = 180 / M_PI ;
-    const float hist = 0.1 ; // degrees
+    const float hist = 0.01 ; // degrees
     ////
     long inc_t = t_now - t_last ;
     const float alpha = ypr[1] * dg_rad ; // pitch in dg, pve means head's down
@@ -695,7 +695,7 @@ void imu_loop() {
     const float vkD = .0;
     float fbta ; 
     // positive error means go backwards
-    if (fabs(error) > hist ) {
+    if (fabs(error) > hist && fabs(fb) > 0) {
       const float speed = -constrain(
                             fb > 0 ?
                             map( fb, 0, crash_ang, min_speed, max_speed  ) :
