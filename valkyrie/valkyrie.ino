@@ -133,10 +133,10 @@ SoftwareSerial BTserial(rxPin, txPin); // RX | TX
 
 
 bool LOGGING = false ;   // enable logging to GUI
-bool RUN = false ;        // enable motors
+bool RUN = true ;        // enable motors
 
 /// timming
-unsigned long t_now = 0;
+//unsigned long t_now = 0;
 unsigned long t_last = 0;
 unsigned long t_last_log = -1 ;
 unsigned long cmd_tout = -1 ;
@@ -146,23 +146,24 @@ unsigned long cmd_tout = -1 ;
 int pos = 105;    // leg pos
 
 // motor velocities
-int max_speed = 250 ; // 120
-int min_speed = 70 ; // 100 90
-int crash_ang = 60 ;
+int max_speed = 140 ; // 120
+int min_speed = 57 ; // 100 90 min 57
+const int crash_ang = 15 ; //60 ;
 
 // target angle and safe zone. depends on, e.g. kind of batteries used.
 // todo: nest another PID to find the target angle (is the one that gets null ang. vel.)
 // for pos = 105:
-float target =  7.0 ;  // 4.9 ;  // lipo 400mAh batts
+float target =  4.5 ;  // 4.9 ;  // lipo 400mAh batts
 //float target = 7.0 ;  // standard duracell
 //float target =  -80.0 ;
 
 // kP = 1.5 kI = 0.01 kD = .04
 // pid controler parameters
-float pid_P = 0.0;// .81 ; // 3.0; 5.5
+float pid_P = 0.075;// .81 ; // 3.0; 5.5
 float pid_I = 0.0; // 0.02  .002
-float pid_D = 0.0; // .002 ;
+float pid_D = 0.1; // .002 ;
 
+int crash_fb = 5 ;
 float int_error = 0 ;
 float speed_int_error = 0 ;
 /////////////////////////////////////////////////////////////////
@@ -313,7 +314,7 @@ void comms_setup() {
 void T_setup() {
 
   for (int p = 0; p <= data_len; ++p ) log_point[p] = 0;
-  t_now = millis() ;
+  const unsigned long t_now = millis() ;
   t_last = t_now - 500  ;
   cmd_tout = -1 ; //t_now + 1500 ;
 
@@ -349,23 +350,283 @@ void setup() {
 
 }
 
-boolean lflip = true ;
+
+
+
+
+
 
 void loop() {
   //
-  t_now = millis() ;
+  const unsigned long t_now = millis() ;
   // heartbeat
   boolean flip = int(t_now / 500) % 2;
-  if (flip != lflip ) {
+  if (flip != digitalRead(BTLEDPin) ) {
     BTserial.println(F("HB"));
-    lflip = flip;
-    digitalWrite(BTLEDPin, lflip);
+    digitalWrite(BTLEDPin, flip);
   }
   //
   comms_loop();
   telemetry() ;
   if (mpuInterrupt) imu_loop() ; // wait for MPU interrupt
-  t_last = t_now ;
+}
+
+
+
+void imu_loop() {
+  mpuInterrupt = false;                      // reset interrupt flag and get INT_STATUS byte
+  uint8_t mpuIntStatus = mpu.getIntStatus(); // holds actual interrupt status byte from MPU
+  uint16_t fifoCount = mpu.getFIFOCount();   // get current FIFO count
+
+  // check for overflow (this should never happen unless our code is too inefficient)
+  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+    mpu.resetFIFO(); // reset so we can continue cleanly
+    BTserial.println(F("FIFO overflow!"));
+    return ;
+  }
+  // otherwise, check for DMP data ready interrupt (this should happen frequently)
+  if (mpuIntStatus & 0x02) {
+    // wait for correct available data length, should be a VERY short wait
+    //waiting_for_FIFO = true;
+    while (fifoCount < packetSize ) {
+      fifoCount = mpu.getFIFOCount();
+    }
+    uint8_t fifoBuffer[64];                   // FIFO storage buffer
+    mpu.getFIFOBytes(fifoBuffer, packetSize); // read a packet from FIFO
+    unsigned long t_now = millis() ;
+
+    // track FIFO count here in case there is > 1 packet available
+    // (this lets us immediately read more without waiting for an interrupt)
+    fifoCount -= packetSize;
+
+    // orientation/motion vars
+    Quaternion q;                       // [w, x, y, z]         quaternion container
+    VectorInt16 gyro, acel_raw, acel;   // [x, y, z]            gyro angular velocity, and acceleration
+    VectorFloat gravity;                // [x, y, z]            gravity vector
+    float ypr[3];                       // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
+
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
+    mpu.dmpGetGravity(&gravity, &q);
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+    mpu.dmpGetGyro( &gyro, fifoBuffer) ;
+   // mpu.dmpGetAccel( &acel_raw, fifoBuffer) ;
+   // mpu.dmpGetLinearAccel( &acel, &acel_raw, &gravity);
+    
+    //static boolean tflip = false ;
+    //boolean flip = int(millis()/ 500) % 2;
+    //if (flip != tflip ) { Serial.print(acel.x) ; Serial.print(", ") ;  Serial.print(acel.y) ; Serial.print(", ") ; Serial.println(acel.z) ; tflip = flip ; }
+
+    ///
+    const float dg_rad = 180 / M_PI ;
+    const float hist = 0.1 ; // degrees
+    ////
+    const unsigned long inc_t = t_now - t_last ;
+    t_last = t_now ;
+    const float alpha = ypr[1] * dg_rad ; // pitch in dg, pve means head's down
+    const float w = - gyro.y / 131.0 ; // 1 dg/s = 131 in register. d_e/d_t = - w
+    //const float ax = - acel.x * 9.8 / 8192.0 ; // m/s2
+    
+    const float error = target - alpha ;
+    int_error += error * (float)inc_t / 1000.0 ; // per s
+
+    //const float fb = pid_P * error  + pid_D * gyro.y * 180/M_PI + pid_I * int_error ;
+    const float fbp = pid_P * error ;
+    const float fbi = pid_I * int_error ;
+    const float fbd = pid_D * w;
+    const float fb = fbp + fbi + fbd ;
+
+    // log feedbacks
+    if (LOGGING) {
+      log_point[0] = 100 * alpha;
+      log_point[1] = 100 * target;
+      log_point[2] = 100 * fbp ;
+      log_point[3] = 100 * fbi;
+      log_point[4] = 100 * fbd ;
+      log_point[5] = 0 ;  // speed
+    }
+    const float vkP = .0;
+    const float vkI = .0;
+    const float vkD = .0;
+    float fbta ; 
+    // positive error means go backwards
+    //if (fabs(error) > hist || fabs(fb) > 0.1) {
+    if (fabs(fb) > .000001) 
+    {
+      const float speed = -constrain(
+                            fb > 0 ?
+                            map( fb, 0, crash_fb, min_speed, max_speed  ) :
+                            map( fb, -crash_fb, 0, -max_speed, -min_speed  ),
+                            -max_speed, max_speed );
+
+      if (LOGGING) log_point[5] = 100 * speed ;
+      moveForward( speed ) ;
+      
+          
+      //const float ta_speed = 0 ;
+      //const float speed_error = ta_speed - speed ;
+      //speed_int_error += speed_error  * (float)inc_t / 1000.0 ;
+      //fbta = vkP * speed_error  + vkD * ax  + vkI * speed_int_error ;
+    }
+    else {
+      int_error = 0 ;  // unwind
+      fullStop();
+      
+      //fbta = vkP * ax  +  vkI * speed_int_error ;
+    }
+    //target -= fbta  ;
+    Serial.println(inc_t); 
+  }
+}
+
+
+COMMS last_COMMST = (COMMS) - 1;
+
+// process incomming bytes, one by one
+void comms_loop()
+{
+  unsigned long t_now = millis() ;
+  if (COMMST != last_COMMST) {
+    Serial.print(t_now); Serial.print(F("] Comms: ")); Serial.println( COMMST );
+    last_COMMST = COMMST;
+  }
+
+  if (COMMST != WAITING && t_now > cmd_tout) {
+    Serial.print(t_now); Serial.print(F("] Timeout!")); // Serial.println( cmd_tout );
+    flush_out();
+    BTserial.println( F("R:TO") ) ;
+    cmd_tout = -1 ;// t_now + 1000 ;
+    COMMST = WAITING ;
+  }
+
+  if (BTserial.available())  {
+    delay(1); // wait for buffer fill up
+    byte c = BTserial.read();
+#ifdef DEBUG_COMMS
+    Serial.print(t_now); Serial.print(F("] Read: ")); Serial.println(c & 0x0FF, HEX);
+#endif
+    switch (COMMST) {
+
+      case READING_CMD: COMMST = (COMMS)read_cmd( c) ;           break ;
+      case READING_CRC: COMMST = (COMMS)build_param_data(c) ;    break ;
+      case READING_LEN: COMMST = (COMMS)expected_data_len(c);    break ;
+      case READING_SET: COMMST = (COMMS)build_param_data(c);     break ;
+      //case RUN_CMD_BUFFER:     COMMST = run_cmd(param_buffer);    break ;
+      case WAITING:
+        if (c == CMD) {
+          COMMST = READING_CMD ;
+          cmd_tout = -1 ; //t_now + 1000 ;
+          break ;
+        }
+      default: Serial.print(t_now); Serial.print(F("] ?")); Serial.println(c, HEX);
+    }
+  }
+
+  if (COMMST == RUN_CMD_BUFFER ) {
+    COMMST = (COMMS)run_cmd(param_buffer);
+  }
+}
+
+
+
+
+void telemetry() {
+  unsigned long t_now = millis() ;
+  if (LOGGING && t_now - t_last_log > 200) {
+    BTserial.print( F("LOG:") );
+    BTserial.print( t_now ); BTserial.print( F(":" ));
+    for ( int p = 0; p <= data_len; ++p ) {
+      //BTserial.print( log_point[p], 2);
+      BTserial.print( log_point[p] );
+      BTserial.print( (p == data_len) ? "\n" : ":");
+    }
+    t_last_log = t_now ;
+  }
+}
+
+
+
+
+int run_cmd( byte* data) {
+  unsigned long t_now = millis() ;
+  COMMST = WAITING;  // if not, update it on command code
+  byte cmd = data[1] ;
+#ifdef DEBUG_COMMS
+  Serial.print(t_now); Serial.print(F("] Run: ")); Serial.println(cmd, HEX);
+#endif
+  switch (cmd) {
+    case STATUS :
+      BTserial.println( F("OK: Ready!")) ;
+      if (!RUN) { RUN = true; IamAlive(); }  
+      break ;
+    case PANIC :
+      fullStop();
+      RUN = false ;
+      BTserial.println( F("OK: SHTDN")) ;
+      break ;
+    case START_LOGGING :
+      BTserial.println( F("OK: TL on")) ;
+      LOGGING = true;
+      break ;
+    case STOP_LOGGING :
+      BTserial.println( F("OK: TL off")) ;
+      LOGGING = false;
+      break ;
+    case LIGHTS_ON :
+      BTserial.println( F("OK: L on")) ;
+      digitalWrite(BTLEDPin, HIGH);
+      break ;
+    case LIGHTS_OFF :
+      BTserial.println( F("OK: L off")) ;
+      digitalWrite(BTLEDPin, LOW);
+      break ;
+    case SHOW_PARAMS :
+      // sprintf in the libstc version lite, used for linking in Arduino IDE, do not support %f :(
+      BTserial.print( F("OK: ")) ;
+      BTserial.print( F(  "kP = ")) ;  BTserial.print( pid_P, 4) ;
+      BTserial.print( F(", kI = ")) ;  BTserial.print( pid_I, 4 ) ;
+      BTserial.print( F(", kD = ")) ;  BTserial.print( pid_D, 4 ) ;
+      BTserial.print( F(", ta = ")) ;  BTserial.println( target, 4 ) ;
+      break ;
+    case SET_1PARAM :
+      BTserial.println( F("OK: set")) ;
+      set_param( data );
+      break ;
+    default:
+      BTserial.print( F("E: ")) ; BTserial.print( cmd, HEX) ; BTserial.println(F("?!")) ;
+      break ;
+  }
+  BTserial.println(F(".")) ; // read buffer
+  return COMMST ;
+}
+
+
+// COMMS
+int read_cmd( byte c) {
+#ifdef DEBUG_COMMS
+  Serial.print(F("Cmd: ")); Serial.println(c, HEX);
+#endif
+  switch (c) {
+    case STATUS :
+    case PANIC :
+    case START_LOGGING :
+    case STOP_LOGGING :
+    case LIGHTS_ON :
+    case LIGHTS_OFF :
+    case SHOW_PARAMS :
+      start_buffering(c);
+      buffer_expected_len = 6 ; // "C" + CMD + 4 CRC bytes
+      COMMST = READING_CRC ;
+      break ;
+    case SET_1PARAM :
+      start_buffering(c);
+      COMMST = READING_LEN ;
+      break ;
+    default:
+      BTserial.println(F( "E: ?!") ) ;
+      flush_out();
+      COMMST = WAITING ;
+  }
+  return COMMST ;
 }
 
 
@@ -478,255 +739,16 @@ void start_buffering(byte c) {
   param_buffer[buffer_pos++] = c ; // crc covers cmd header too
 }
 
-// COMMS
-int read_cmd( byte c) {
-#ifdef DEBUG_COMMS
-  Serial.print(F("Cmd: ")); Serial.println(c, HEX);
-#endif
-  switch (c) {
-    case STATUS :
-    case PANIC :
-    case START_LOGGING :
-    case STOP_LOGGING :
-    case LIGHTS_ON :
-    case LIGHTS_OFF :
-    case SHOW_PARAMS :
-      start_buffering(c);
-      buffer_expected_len = 6 ; // "C" + CMD + 4 CRC bytes
-      COMMST = READING_CRC ;
-      break ;
-    case SET_1PARAM :
-      start_buffering(c);
-      COMMST = READING_LEN ;
-      break ;
-    default:
-      BTserial.println(F( "E: ?!") ) ;
-      flush_out();
-      COMMST = WAITING ;
-  }
-  return COMMST ;
-}
-
-void telemetry() {
-  if (LOGGING && t_now - t_last_log > 200) {
-    BTserial.print( F("LOG:") );
-    BTserial.print( t_now ); BTserial.print( F(":" ));
-    for ( int p = 0; p <= data_len; ++p ) {
-      //BTserial.print( log_point[p], 2);
-      BTserial.print( log_point[p] );
-      BTserial.print( (p == data_len) ? "\n" : ":");
-    }
-    t_last_log = t_now ;
-  }
-}
 
 
-COMMS last_COMMST = (COMMS) - 1;
-
-// process incomming bytes, one by one
-void comms_loop()
-{
-  if (COMMST != last_COMMST) {
-    Serial.print(t_now); Serial.print(F("] Comms: ")); Serial.println( COMMST );
-    last_COMMST = COMMST;
-  }
-
-  if (COMMST != WAITING && t_now > cmd_tout) {
-    Serial.print(t_now); Serial.print(F("] Timeout!")); // Serial.println( cmd_tout );
-    flush_out();
-    BTserial.println( F("R:TO") ) ;
-    cmd_tout = -1 ;// t_now + 1000 ;
-    COMMST = WAITING ;
-  }
-
-  if (BTserial.available())  {
-    delay(1); // wait for buffer fill up
-    byte c = BTserial.read();
-#ifdef DEBUG_COMMS
-    Serial.print(t_now); Serial.print(F("] Read: ")); Serial.println(c & 0x0FF, HEX);
-#endif
-    switch (COMMST) {
-
-      case READING_CMD: COMMST = (COMMS)read_cmd( c) ;           break ;
-      case READING_CRC: COMMST = (COMMS)build_param_data(c) ;    break ;
-      case READING_LEN: COMMST = (COMMS)expected_data_len(c);    break ;
-      case READING_SET: COMMST = (COMMS)build_param_data(c);     break ;
-      //case RUN_CMD_BUFFER:     COMMST = run_cmd(param_buffer);    break ;
-      case WAITING:
-        if (c == CMD) {
-          COMMST = READING_CMD ;
-          cmd_tout = -1 ; //t_now + 1000 ;
-          break ;
-        }
-      default: Serial.print(t_now); Serial.print(F("] ?")); Serial.println(c, HEX);
-    }
-  }
-
-  if (COMMST == RUN_CMD_BUFFER ) {
-    COMMST = (COMMS)run_cmd(param_buffer);
-  }
-}
 
 
-int run_cmd( byte* data) {
-  COMMST = WAITING;  // if not, update it on command code
-  byte cmd = data[1] ;
-#ifdef DEBUG_COMMS
-  Serial.print(t_now); Serial.print(F("] Run: ")); Serial.println(cmd, HEX);
-#endif
-  switch (cmd) {
-    case STATUS :
-      BTserial.println( F("OK: Ready!")) ;
-      if (!RUN) { RUN = true; IamAlive(); }  
-      break ;
-    case PANIC :
-      fullStop();
-      RUN = false ;
-      BTserial.println( F("OK: SHTDN")) ;
-      break ;
-    case START_LOGGING :
-      BTserial.println( F("OK: TL on")) ;
-      LOGGING = true;
-      break ;
-    case STOP_LOGGING :
-      BTserial.println( F("OK: TL off")) ;
-      LOGGING = false;
-      break ;
-    case LIGHTS_ON :
-      BTserial.println( F("OK: L on")) ;
-      digitalWrite(BTLEDPin, HIGH);
-      break ;
-    case LIGHTS_OFF :
-      BTserial.println( F("OK: L off")) ;
-      digitalWrite(BTLEDPin, LOW);
-      break ;
-    case SHOW_PARAMS :
-      // sprintf in the libstc version lite, used for linking in Arduino IDE, do not support %f :(
-      BTserial.print( F("OK: ")) ;
-      BTserial.print( F(  "kP = ")) ;  BTserial.print( pid_P, 4) ;
-      BTserial.print( F(", kI = ")) ;  BTserial.print( pid_I, 4 ) ;
-      BTserial.print( F(", kD = ")) ;  BTserial.print( pid_D, 4 ) ;
-      BTserial.print( F(", ta = ")) ;  BTserial.println( target, 4 ) ;
-      break ;
-    case SET_1PARAM :
-      BTserial.println( F("OK: set")) ;
-      set_param( data );
-      break ;
-    default:
-      BTserial.print( F("E: ")) ; BTserial.print( cmd, HEX) ; BTserial.println(F("?!")) ;
-      break ;
-  }
-  BTserial.println(F(".")) ; // read buffer
-  return COMMST ;
-}
-
-
-void imu_loop() {
-  mpuInterrupt = false;                      // reset interrupt flag and get INT_STATUS byte
-  uint8_t mpuIntStatus = mpu.getIntStatus(); // holds actual interrupt status byte from MPU
-  uint16_t fifoCount = mpu.getFIFOCount();   // get current FIFO count
-
-  // check for overflow (this should never happen unless our code is too inefficient)
-  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-    mpu.resetFIFO(); // reset so we can continue cleanly
-    BTserial.println(F("FIFO overflow!"));
-    return ;
-  }
-  // otherwise, check for DMP data ready interrupt (this should happen frequently)
-  if (mpuIntStatus & 0x02) {
-    // wait for correct available data length, should be a VERY short wait
-    //waiting_for_FIFO = true;
-    while (fifoCount < packetSize ) {
-      fifoCount = mpu.getFIFOCount();
-    }
-    uint8_t fifoBuffer[64];                   // FIFO storage buffer
-    mpu.getFIFOBytes(fifoBuffer, packetSize); // read a packet from FIFO
-
-    // track FIFO count here in case there is > 1 packet available
-    // (this lets us immediately read more without waiting for an interrupt)
-    fifoCount -= packetSize;
-
-    // orientation/motion vars
-    Quaternion q;                       // [w, x, y, z]         quaternion container
-    VectorInt16 gyro, acel_raw, acel;   // [x, y, z]            gyro angular velocity, and acceleration
-    VectorFloat gravity;                // [x, y, z]            gravity vector
-    float ypr[3];                       // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-
-    mpu.dmpGetQuaternion(&q, fifoBuffer);
-    mpu.dmpGetGravity(&gravity, &q);
-    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-    mpu.dmpGetGyro( &gyro, fifoBuffer) ;
-    mpu.dmpGetAccel( &acel_raw, fifoBuffer) ;
-    mpu.dmpGetLinearAccel( &acel, &acel_raw, &gravity);
-    
-    //static boolean tflip = false ;
-    //boolean flip = int(millis()/ 500) % 2;
-    //if (flip != tflip ) { Serial.print(acel.x) ; Serial.print(", ") ;  Serial.print(acel.y) ; Serial.print(", ") ; Serial.println(acel.z) ; tflip = flip ; }
-
-    ///
-    const float dg_rad = 180 / M_PI ;
-    const float hist = 0.01 ; // degrees
-    ////
-    long inc_t = t_now - t_last ;
-    const float alpha = ypr[1] * dg_rad ; // pitch in dg, pve means head's down
-    const float w = - gyro.y / 131.0 ; // 1 dg/s = 131 in register. d_e/d_t = - w
-    const float ax = - acel.x * 9.8 / 8192.0 ; // m/s2
-    
-    const float error = target - alpha ;
-    int_error += error * (float)inc_t / 1000.0 ; // per s
-
-    //const float fb = pid_P * error  + pid_D * gyro.y * 180/M_PI + pid_I * int_error ;
-    const float fbp = pid_P * error ;
-    const float fbi = pid_I * int_error ;
-    const float fbd = pid_D * w;
-    const float fb = fbp + fbi + fbd ;
-
-    // log feedbacks
-    if (LOGGING) {
-      log_point[0] = 100 * alpha;
-      log_point[1] = 100 * target;
-      log_point[2] = 100 * fbp ;
-      log_point[3] = 100 * fbi;
-      log_point[4] = 100 * fbd ;
-      log_point[5] = 0 ;  // speed
-    }
-    const float vkP = .0;
-    const float vkI = .0;
-    const float vkD = .0;
-    float fbta ; 
-    // positive error means go backwards
-    if (fabs(error) > hist && fabs(fb) > 0) {
-      const float speed = -constrain(
-                            fb > 0 ?
-                            map( fb, 0, crash_ang, min_speed, max_speed  ) :
-                            map( fb, -crash_ang, 0, -max_speed, -min_speed  ),
-                            -max_speed, max_speed );
-
-      if (LOGGING) log_point[5] = 100 * speed ;
-      moveForward( speed ) ;
-      
-          
-      const float ta_speed = 0 ;
-      const float speed_error = ta_speed - speed ;
-      speed_int_error += speed_error  * (float)inc_t / 1000.0 ;
-      fbta = vkP * speed_error  + vkD * ax  + vkI * speed_int_error ;
-    }
-    else {
-      int_error = 0 ;  // unwind
-      fullStop();
-      
-      fbta = vkP * ax  +  vkI * speed_int_error ;
-    }
-    target -= fbta  ;
-    //Serial.println(target); 
-  }
-}
 
 
 void zero(int pos) {
   if (!RUN) return ;
   Serial.print(F("pos: ")); Serial.println(pos);
-  Lservo.write(180 - pos); // goto pos mark
+  Lservo.write(175 - pos); // goto pos mark
   Rservo.write(pos - 11); // both legs, 180 and 11 are the limits of each side
   delay(15);             // wait 15ms for the servos to reach the position
 }

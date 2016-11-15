@@ -64,7 +64,7 @@ float kI = .00;
 float kD = .0; 
  
 float minkP = 0 ;
-float maxkP = 1 ;
+float maxkP = .8 ;
 
 float minkI = 0 ;
 float maxkI = 1 ;
