@@ -146,24 +146,31 @@ unsigned long cmd_tout = -1 ;
 int pos = 105;    // leg pos
 
 // motor velocities
-int max_speed = 140 ; // 120
-int min_speed = 57 ; // 100 90 min 57
+// cable
+//int max_speed =  171 ;// 250 ; // 120
+//int min_speed = 72 ; // 63 ; // 72 ; // 100 90 min 57
+// batt
+int max_speed =  230;
+int min_speed = 183 ;
 const int crash_ang = 15 ; //60 ;
 
 // target angle and safe zone. depends on, e.g. kind of batteries used.
 // todo: nest another PID to find the target angle (is the one that gets null ang. vel.)
-// for pos = 105:
-float target =  4.5 ;  // 4.9 ;  // lipo 400mAh batts
+// for pos = 105, cable
+//float target =  3.18 ; //7.44 ;  // 4.9 ;  // lipo 400mAh batts
+// batt:
+float target =  2; 
+
 //float target = 7.0 ;  // standard duracell
 //float target =  -80.0 ;
 
-// kP = 1.5 kI = 0.01 kD = .04
-// pid controler parameters
-float pid_P = 0.075;// .81 ; // 3.0; 5.5
-float pid_I = 0.0; // 0.02  .002
-float pid_D = 0.1; // .002 ;
 
-int crash_fb = 5 ;
+// pid controler parameters
+float pid_P = 1.1692; // .9803; //0.685;
+float pid_I = .2125; // .118; // 0.364;
+float pid_D = .0590; //1.4173; // 1.8503; 
+
+int crash_fb = 20 ;
 float int_error = 0 ;
 float speed_int_error = 0 ;
 /////////////////////////////////////////////////////////////////
@@ -374,6 +381,7 @@ void loop() {
 
 
 void imu_loop() {
+  fullStop();
   mpuInterrupt = false;                      // reset interrupt flag and get INT_STATUS byte
   uint8_t mpuIntStatus = mpu.getIntStatus(); // holds actual interrupt status byte from MPU
   uint16_t fifoCount = mpu.getFIFOCount();   // get current FIFO count
@@ -427,14 +435,14 @@ void imu_loop() {
     //const float ax = - acel.x * 9.8 / 8192.0 ; // m/s2
     
     const float error = target - alpha ;
-    int_error += error * (float)inc_t / 1000.0 ; // per s
+    int_error += error * (float)inc_t / 1000.0 / 10.0; // per s
 
     //const float fb = pid_P * error  + pid_D * gyro.y * 180/M_PI + pid_I * int_error ;
     const float fbp = pid_P * error ;
     const float fbi = pid_I * int_error ;
     const float fbd = pid_D * w;
     const float fb = fbp + fbi + fbd ;
-
+    if (fabs(fbi)>crash_fb) int_error/=2.0 ; // unwind a bit
     // log feedbacks
     if (LOGGING) {
       log_point[0] = 100 * alpha;
@@ -460,7 +468,8 @@ void imu_loop() {
 
       if (LOGGING) log_point[5] = 100 * speed ;
       moveForward( speed ) ;
-      
+      //delay(3);
+      //fullStop();
           
       //const float ta_speed = 0 ;
       //const float speed_error = ta_speed - speed ;
@@ -474,7 +483,7 @@ void imu_loop() {
       //fbta = vkP * ax  +  vkI * speed_int_error ;
     }
     //target -= fbta  ;
-    Serial.println(inc_t); 
+   //Serial.println(inc_t); 
   }
 }
 
@@ -643,7 +652,7 @@ void set_param(byte* data) {
   //Serial.println(F("set_param"));
   int param = data[3] ;
   long vint = (long)((uint32_t)data[4] << 24 | (uint32_t)data[5] << 16 | (uint32_t)data[6] << 8 | (uint32_t)data[7] );
-  float value = vint / 1000.0;
+  float value = vint / 1000.0; // 
   set_param( param, value) ;
 }
 
