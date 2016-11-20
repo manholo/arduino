@@ -64,13 +64,13 @@ float kI = .00;
 float kD = .0; 
  
 float minkP = 0 ;
-float maxkP = .8 ;
+float maxkP = 150 ;
 
 float minkI = 0 ;
-float maxkI = 1 ;
+float maxkI = 150 ;
 
 float minkD = 0 ;
-float maxkD = 1 ;
+float maxkD = 250 ;
 
 float minTA = -15 ;
 float maxTA = 15 ;
@@ -167,7 +167,7 @@ void command( char cmd ) {
 
 void set_param( int p, float value ) {
   println(String.format("req %s = %5.2f", param_names[p], value));
-  last_payload = append_crc( append_int( String.format("C%c%c%c", CMD.SET_PARAM, 12, (byte)p ).getBytes(), int(value * 1000))) ;
+  last_payload = append_crc( append_int( String.format("C%c%c%c", CMD.SET_PARAM, 12, (byte)p ).getBytes(), int(value*1000))) ; // va;ue in bp
   last_cmd = CMD.SET_PARAM ;
   resend();
 }
@@ -194,8 +194,8 @@ void setup() {
 
   log = createWriter("telemetry.txt");
   
-  //midibus = new MidiBus(this, "nanoKONTROL", "");
-  midibus = new MidiBus(this,"SLIDER/KNOB", "");
+  midibus = new MidiBus(this, "nanoKONTROL", "");
+  //midibus = new MidiBus(this,"SLIDER/KNOB", "");
   
   cp5 = new ControlP5(this);
        
@@ -425,21 +425,21 @@ void connection(int n) {
 void kP(float theValue) {
   if (valkyrie_connected) {
     //println("req KP = " + theValue);
-    set_param( PARAM.KP, theValue );
+    set_param( PARAM.KP, theValue/100.0 );
   } 
 }
 
 void kI(float theValue) {
   if (valkyrie_connected) {
    // println("req KI = " + theValue);
-    set_param( PARAM.KI, theValue );
+    set_param( PARAM.KI, theValue/100.0 );
   }
 }
 
 void kD(float theValue) {
   if (valkyrie_connected) {
     //println("req KD = " + theValue);
-    set_param( PARAM.KD, theValue );
+    set_param( PARAM.KD, theValue/100.0 );
   }
 }
 

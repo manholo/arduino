@@ -145,13 +145,7 @@ unsigned long cmd_tout = -1 ;
 /////////////////////////////////////////////////////////////////
 int pos = 105;    // leg pos
 
-// motor velocities
-// cable
-//int max_speed =  171 ;// 250 ; // 120
-//int min_speed = 72 ; // 63 ; // 72 ; // 100 90 min 57
-// batt
-int max_speed =  230;
-int min_speed = 183 ;
+
 const int crash_ang = 15 ; //60 ;
 
 // target angle and safe zone. depends on, e.g. kind of batteries used.
@@ -159,18 +153,53 @@ const int crash_ang = 15 ; //60 ;
 // for pos = 105, cable
 //float target =  3.18 ; //7.44 ;  // 4.9 ;  // lipo 400mAh batts
 // batt:
-float target =  2; 
+float target =  3.89; 
 
 //float target = 7.0 ;  // standard duracell
 //float target =  -80.0 ;
 
 
-// pid controler parameters
-float pid_P = 1.1692; // .9803; //0.685;
-float pid_I = .2125; // .118; // 0.364;
-float pid_D = .0590; //1.4173; // 1.8503; 
+// pid controler parameters plus motor parameters (common gain)
+#define HAWK
+//#define DOVE
+#define CABLE
+//#define BATT
 
-int crash_fb = 20 ;
+#ifdef HAWK
+float pid_P = 7.6370; //1.1692; // .9803; //0.685;
+float pid_I = 42.2750; //.2125; // .118; // 0.364;
+float pid_D = 1.5740; //.0590; //1.4173; // 1.8503;
+// motor velocities
+#ifdef CABLE
+int max_speed =  238 ;//171 ;// 250 ; // 120
+int min_speed = 37 ;//72 ; // 63 ; // 72 ; // 100 90 min 57
+
+#endif
+#ifdef BATT11
+int max_speed =  230;
+int min_speed = 183 ;
+#endif
+#endif
+
+#ifdef DOVE
+float pid_P = .9094; 
+float pid_I = .2716; 
+float pid_D = .2362;  
+#ifdef CABLE
+int max_speed =  175 ;
+int min_speed = 57 ; 
+#endif
+#ifdef BATT
+int max_speed =  210;
+int min_speed = 150 ;
+
+#endif
+#endif
+int crash_fb = 60; //20 ;
+
+
+
+
 float int_error = 0 ;
 float speed_int_error = 0 ;
 /////////////////////////////////////////////////////////////////
@@ -188,7 +217,8 @@ enum CMD : byte {
   START_LOGGING = 30,
   STOP_LOGGING = 35,
   //LEAN = 40,
-  PANIC = 100
+  PANIC = 100,
+  RESET = 255
 } ;
 
 enum PARAM : byte {
@@ -239,7 +269,7 @@ void Wire_setup() {
 
 void IMU_setup() {
   // initialize device
-  Serial.println(F("Init. I2C"));
+  Serial.println(F("Init. MPU I2C"));
   mpu.initialize();
 
   // load and configure the DMP
@@ -432,7 +462,7 @@ void imu_loop() {
     t_last = t_now ;
     const float alpha = ypr[1] * dg_rad ; // pitch in dg, pve means head's down
     const float w = - gyro.y / 131.0 ; // 1 dg/s = 131 in register. d_e/d_t = - w
-    //const float ax = - acel.x * 9.8 / 8192.0 ; // m/s2
+    const float ax = - acel.x * 9.8 / 8192.0 ; // m/s2  for the v pid
     
     const float error = target - alpha ;
     int_error += error * (float)inc_t / 1000.0 / 10.0; // per s
@@ -452,13 +482,13 @@ void imu_loop() {
       log_point[4] = 100 * fbd ;
       log_point[5] = 0 ;  // speed
     }
-    const float vkP = .0;
-    const float vkI = .0;
-    const float vkD = .0;
+    const float vkP = 1e-4;
+    const float vkI = 1e-5;
+    const float vkD = 1e-7;
     float fbta ; 
     // positive error means go backwards
     //if (fabs(error) > hist || fabs(fb) > 0.1) {
-    if (fabs(fb) > .000001) 
+    if (fabs(fb) > .1) 
     {
       const float speed = -constrain(
                             fb > 0 ?
@@ -468,21 +498,19 @@ void imu_loop() {
 
       if (LOGGING) log_point[5] = 100 * speed ;
       moveForward( speed ) ;
-      //delay(3);
-      //fullStop();
           
-      //const float ta_speed = 0 ;
-      //const float speed_error = ta_speed - speed ;
-      //speed_int_error += speed_error  * (float)inc_t / 1000.0 ;
-      //fbta = vkP * speed_error  + vkD * ax  + vkI * speed_int_error ;
+      const float ta_speed = 0 ;
+      const float speed_error = ta_speed - speed ;
+      speed_int_error += speed_error  * (float)inc_t / 1000.0 ;
+      fbta = vkP * speed_error  + vkD * ax  + vkI * speed_int_error ;
     }
     else {
       int_error = 0 ;  // unwind
       fullStop();
       
-      //fbta = vkP * ax  +  vkI * speed_int_error ;
+      fbta = vkD * ax  +  vkI * speed_int_error ;
     }
-    //target -= fbta  ;
+    target -= fbta  ;
    //Serial.println(inc_t); 
   }
 }
@@ -572,6 +600,11 @@ int run_cmd( byte* data) {
       RUN = false ;
       BTserial.println( F("OK: SHTDN")) ;
       break ;
+    case RESET :
+      IMU_setup();
+      RUN = false ;
+      BTserial.println( F("OK: RESET")) ;
+      break ;
     case START_LOGGING :
       BTserial.println( F("OK: TL on")) ;
       LOGGING = true;
@@ -591,10 +624,10 @@ int run_cmd( byte* data) {
     case SHOW_PARAMS :
       // sprintf in the libstc version lite, used for linking in Arduino IDE, do not support %f :(
       BTserial.print( F("OK: ")) ;
-      BTserial.print( F(  "kP = ")) ;  BTserial.print( pid_P, 4) ;
-      BTserial.print( F(", kI = ")) ;  BTserial.print( pid_I, 4 ) ;
-      BTserial.print( F(", kD = ")) ;  BTserial.print( pid_D, 4 ) ;
-      BTserial.print( F(", ta = ")) ;  BTserial.println( target, 4 ) ;
+      BTserial.print( F(  "KP = ")) ;  BTserial.print( pid_P, 4) ;
+      BTserial.print( F(", KI = ")) ;  BTserial.print( pid_I, 4 ) ;
+      BTserial.print( F(", KD = ")) ;  BTserial.print( pid_D, 4 ) ;
+      BTserial.print( F(", TA = ")) ;  BTserial.println( target, 4 ) ;
       break ;
     case SET_1PARAM :
       BTserial.println( F("OK: set")) ;
@@ -617,6 +650,7 @@ int read_cmd( byte c) {
   switch (c) {
     case STATUS :
     case PANIC :
+    case RESET :
     case START_LOGGING :
     case STOP_LOGGING :
     case LIGHTS_ON :
