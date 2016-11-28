@@ -171,11 +171,11 @@ float pid_I = 42.2750; //.2125; // .118; // 0.364;
 float pid_D = 1.5740; //.0590; //1.4173; // 1.8503;
 // motor velocities
 #ifdef CABLE
-int max_speed =  238 ;//171 ;// 250 ; // 120
+int max_speed = 150 ;//171 ;// 250 ; // 120
 int min_speed = 37 ;//72 ; // 63 ; // 72 ; // 100 90 min 57
 
 #endif
-#ifdef BATT11
+#ifdef BATT
 int max_speed =  230;
 int min_speed = 183 ;
 #endif
@@ -482,13 +482,15 @@ void imu_loop() {
       log_point[4] = 100 * fbd ;
       log_point[5] = 0 ;  // speed
     }
-    const float vkP = 1e-4;
-    const float vkI = 1e-5;
-    const float vkD = 1e-7;
+    const float vkP = 0 ; //.001;
+    const float vkI = 0; //1e-5;
+    const float vkD = 0; //.01;
+    const float ta_speed = 0 ;
+
     float fbta ; 
     // positive error means go backwards
     //if (fabs(error) > hist || fabs(fb) > 0.1) {
-    if (fabs(fb) > .1) 
+    if (fabs(fb) > .5) 
     {
       const float speed = -constrain(
                             fb > 0 ?
@@ -497,18 +499,30 @@ void imu_loop() {
                             -max_speed, max_speed );
 
       if (LOGGING) log_point[5] = 100 * speed ;
+      
       moveForward( speed ) ;
-          
-      const float ta_speed = 0 ;
+      
       const float speed_error = ta_speed - speed ;
-      speed_int_error += speed_error  * (float)inc_t / 1000.0 ;
+      speed_int_error += speed_error  * (float)inc_t / 1000.0 ;    
       fbta = vkP * speed_error  + vkD * ax  + vkI * speed_int_error ;
+    }
+    else if (fabs(fb) > .1){
+      const float speed = -( fb > 0 ? 255: -255 );
+      if (LOGGING) log_point[5] = 100 * speed ;
+      
+      moveForward( speed ) ;
+      delay(3);
+      fullStop();
+      
+      const float speed_error = ta_speed - speed ;
+      speed_int_error += speed_error  * 2.0 / 1000.0 ;
+      fbta = vkD * ax  +  vkI * speed_int_error ;
     }
     else {
       int_error = 0 ;  // unwind
       fullStop();
       
-      fbta = vkD * ax  +  vkI * speed_int_error ;
+      fbta = 0 ; // vkD * ax  +  vkI * speed_int_error ;
     }
     target -= fbta  ;
    //Serial.println(inc_t); 
@@ -624,10 +638,12 @@ int run_cmd( byte* data) {
     case SHOW_PARAMS :
       // sprintf in the libstc version lite, used for linking in Arduino IDE, do not support %f :(
       BTserial.print( F("OK: ")) ;
-      BTserial.print( F(  "KP = ")) ;  BTserial.print( pid_P, 4) ;
+      BTserial.print( F(" TA = ")) ;  BTserial.print( target, 4 ) ;
+      BTserial.print( F(", KP = ")) ;  BTserial.print( pid_P, 4) ;
       BTserial.print( F(", KI = ")) ;  BTserial.print( pid_I, 4 ) ;
       BTserial.print( F(", KD = ")) ;  BTserial.print( pid_D, 4 ) ;
-      BTserial.print( F(", TA = ")) ;  BTserial.println( target, 4 ) ;
+      BTserial.print( F(", LS = ")) ;  BTserial.print( min_speed, 4 ) ;
+      BTserial.print( F(", HS = ")) ;  BTserial.println( max_speed, 4 ) ;
       break ;
     case SET_1PARAM :
       BTserial.println( F("OK: set")) ;

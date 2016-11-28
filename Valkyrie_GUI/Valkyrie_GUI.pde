@@ -5,6 +5,7 @@ import controlP5.*;
 import processing.serial.*;
 import themidibus.*; 
 import javax.sound.midi.MidiMessage;
+import static javax.swing.JOptionPane.*; // for the popups
 
 MidiBus midibus; // The MidiBus
 
@@ -64,13 +65,13 @@ float kI = .00;
 float kD = .0; 
  
 float minkP = 0 ;
-float maxkP = 150 ;
+float maxkP = 1000 ;
 
 float minkI = 0 ;
-float maxkI = 150 ;
+float maxkI = 5000 ;
 
 float minkD = 0 ;
-float maxkD = 250 ;
+float maxkD = 5000 ;
 
 float minTA = -15 ;
 float maxTA = 15 ;
@@ -87,7 +88,7 @@ Knob kDKnob;
 Knob kIKnob;
 Knob posKnob;
 Knob targetKnob;
-CheckBox lightscb, logcb, anlzcb, paniccb;
+CheckBox lightscb, logcb, anlzcb, paniccb, resetcb;
 Textarea textarea;
 Chart plot;
 Println console;
@@ -108,7 +109,8 @@ interface CMD {
   START_LOGGING = 30,
   STOP_LOGGING = 35,
   LEAN = 40,
-  PANIC = 100  ;
+  PANIC = 100,
+  RESET = 255  ;
 } ;
 
 interface PARAM {
@@ -140,6 +142,7 @@ boolean waiting_line = false ;
 long wait_timeout ;
 long midi_debounce ; // do not send any param update from midi until some time has passed since last midi message
 
+HashMap<String,String> profile ; // read all at ince
 
 byte[] append_byte( byte[] payload, int p ) {
   return append ( payload, (byte)  ( p & 0xFF) );
@@ -186,6 +189,25 @@ void resend( ) {
   wait_timeout = millis() + 500 ;
 }
 
+void read_profiles()
+{
+  profile = new HashMap<String, String>();
+  String lines[] = loadStrings("profiles.ini"); //<>//
+  for (int i = 0 ; i < lines.length; i++) {
+    String[] row = lines[i].split(":",0); 
+    profile.put( row[0].trim(), row[1]);
+  }
+}
+
+void write_profiles()
+{
+  List<String> lines = new ArrayList<String>();
+  
+  for ( String k : profile.keySet()) 
+      lines.add( String.format("%s: %s", k, profile.get(k)))  ;
+  saveStrings("profiles.ini", lines.toArray("".split("",0)));
+}
+
 void setup() {
   size(550, 650);
   smooth();
@@ -196,6 +218,9 @@ void setup() {
   
   midibus = new MidiBus(this, "nanoKONTROL", "");
   //midibus = new MidiBus(this,"SLIDER/KNOB", "");
+  
+   
+  read_profiles() ; //<>//
   
   cp5 = new ControlP5(this);
        
@@ -211,6 +236,7 @@ void setup() {
                   ;
   };
        
+
   // add a vertical slider for target angle
   cp5.addSlider("target_shade")
      .setPosition(50,300)
@@ -242,33 +268,34 @@ void setup() {
   kPKnob = cp5.addKnob("kP")
                .setRange(minkP, maxkP)
                .setValue(kP)
-               .setPosition(100, 300)
-               .setRadius(50)
+               .setPosition(100, 280)
+               .setRadius(40)
                .setNumberOfTickMarks(20)
                .setTickMarkLength(4)   
                .setDragDirection(Knob.VERTICAL)
                .setResolution(1000)
                //.setViewStyle(Knob.ARC)
                ;
-  kPKnob.getValueLabel().setFont(createFont("Georgia",18));
+  kPKnob.getValueLabel().setFont(createFont("Courier",18));
   
   kIKnob = cp5.addKnob("kI")
                .setRange(minkI, maxkI)
                .setValue(kI)
-               .setPosition(220, 300)
-               .setRadius(50)
+               .setPosition(220, 280)
+               .setRadius(40)
                .setNumberOfTickMarks(20)
                .setTickMarkLength(4)               
                .setDragDirection(Knob.VERTICAL)
                .setResolution(1000)
+               //.setColorValueLabel(color(255,255,20))
                ;
   kIKnob.getValueLabel().setFont(createFont("Georgia",18));           
 
   kDKnob = cp5.addKnob("kD")
                .setRange(minkD, maxkD)
                .setValue(kD)
-               .setPosition(340, 300)
-               .setRadius(50)
+               .setPosition(340, 280)
+               .setRadius(40)
                .setNumberOfTickMarks(20)
                .setTickMarkLength(4)                              
                .setDragDirection(Knob.VERTICAL)
@@ -293,14 +320,19 @@ void setup() {
                 .setSize(40, 40)
                 .addItem("ANLZ", 0)
                 ;  
- paniccb = cp5.addCheckBox("panic")
+ paniccb = cp5.addCheckBox("paniccb")
                 .setPosition(460, 510)
                 .setSize(40, 40)
                 .addItem("PANIC", 0)
                 ;   
+ resetcb = cp5.addCheckBox("resetcb")
+                .setPosition(460, 580)
+                .setSize(40, 40)
+                .addItem("RESET", 0)
+                ;                  
  textarea = cp5.addTextarea("txt")
-                  .setPosition(100, 430)
-                  .setSize(340, 210)
+                  .setPosition(100, 440)
+                  .setSize(340, 200)
                   .setFont(createFont("", 10))
                   .setLineHeight(14)
                   .setColor(color(200))
@@ -332,7 +364,26 @@ void setup() {
      .addItems(Serial.list())
      // .setType(ScrollableList.LIST) // currently supported DROPDOWN and LIST
      ;
+                 
+  cp5.addScrollableList("profile")
+     .setPosition(300, 20)
+     .setSize(100, 100)
+     .setBarHeight(20)
+     .setItemHeight(20)
+     .addItems(profile.keySet().toArray("".split("",0))) // that's a String[]
+     .setType(ScrollableList.DROPDOWN) // currently supported DROPDOWN and LIST
+     ;
+     
+  cp5.addButton("Save")
+     .setPosition(410,20)
+     .setSize(30,20)
+     ;
 
+    cp5.addButton("Send")
+     .setPosition(450,20)
+     .setSize(30,20)
+     ;
+     
   MidiBus.list();
 
   
@@ -352,8 +403,21 @@ void draw() {
   if (valkyrie_connected && waiting_line && millis() > wait_timeout) resend() ;
 }
 
+void update_params( String[] response ) { //<>//
+ for (int p=0; p<response.length; ++p) {
+   String[] p_v = response[p].split("=", 0);
+   switch(p_v[0].trim().toUpperCase()) {
+     case "KP": kPKnob.changeValue(100.0 * float(p_v[1])); break ;
+     case "KI": kIKnob.changeValue(100.0 * float(p_v[1])); break ;
+     case "KD": kDKnob.changeValue(100.0 * float(p_v[1])); break ;
+     case "TA": taSlide.changeValue(float(p_v[1])); break ;
+   }
+ }
+ 
+}
 
 void serialEvent(Serial valkyrie) {
+  
   // read response from serial port (valkyrie)
   String response = valkyrie.readStringUntil(LF) ;
   //if (response.length()==0) return ;
@@ -374,39 +438,39 @@ void serialEvent(Serial valkyrie) {
     return; 
   }
   
+  print(response);
   
+  if (response.startsWith("R")) { resend(); return; }
+  if (response.startsWith("E")) { resend(); return; } //valkyrie.clear() ;
+  if (response.startsWith(".")) { return ; } // for now, ignore
+      
   switch (last_cmd) {
     case CMD.STATUS:
-      if (response.startsWith("OK")) valkyrie_connected = true ;
+      if (response.startsWith("OK") && !valkyrie_connected ) { 
+        valkyrie_connected = true ;
+        command(CMD.SHOW_PARAMS); // get the params from valyrie at connection
+        return ;
+      }
     case CMD.PANIC:
+    case CMD.RESET:
     case CMD.LIGHTS_ON:
     case CMD.LIGHTS_OFF:
     case CMD.START_LOGGING:
     case CMD.STOP_LOGGING:
-    case CMD.SHOW_PARAMS:
-      print(response);
-      
-      if (response.startsWith("R")) { resend(); break; }
-      if (response.startsWith("E")) { resend(); break; } //valkyrie.clear() ;
-      
-      last_cmd = CMD.NONE;
-      waiting_line = false;
-      break ;
     case CMD.SET_PARAM:
-      print(response);
-      if (response.startsWith("OK") ){
-         last_cmd = CMD.NONE;
-         waiting_line = false;
-         break ;
-      } 
-      resend();
+      //print(response);      
       break ;
-    case CMD.NONE: 
-      print(response);
-      waiting_line = false;
+    case CMD.SHOW_PARAMS:
+      //print(response);
+      if (response.startsWith("OK")) update_params(response.substring(4).split(",", 0)); //<>//
       break ;
+    case CMD.NONE:  // nothing expected, may be a SET update, or a "." finalizer
+
+      if (response.startsWith("SP")) { update_params(response.substring(3).split(",", 0)) ; break; }
     default : println ("what?");
-  }
+   }
+   last_cmd = CMD.NONE;
+   waiting_line = false;
 }
 
 
@@ -421,24 +485,28 @@ void connection(int n) {
   
 }
 
+void profile(int n) {
+
+  String name = String.class.cast((cp5.get(ScrollableList.class, "profile").getItem(n).get("text")));
+  println("loading profile: ", name, ":", profile.get(name));
+  update_params(profile.get(name).split(",", 0));
+
+}
 
 void kP(float theValue) {
   if (valkyrie_connected) {
-    //println("req KP = " + theValue);
     set_param( PARAM.KP, theValue/100.0 );
   } 
 }
 
 void kI(float theValue) {
   if (valkyrie_connected) {
-   // println("req KI = " + theValue);
     set_param( PARAM.KI, theValue/100.0 );
   }
 }
 
 void kD(float theValue) {
   if (valkyrie_connected) {
-    //println("req KD = " + theValue);
     set_param( PARAM.KD, theValue/100.0 );
   }
 }
@@ -446,7 +514,6 @@ void kD(float theValue) {
 
 void target(float theValue) {
   if (valkyrie_connected) {
-    //println("req TA = " + theValue);
     set_param( PARAM.TA, theValue );
   }
 }
@@ -469,8 +536,14 @@ void paniccb(float[] a) {
   }
 }
 
+void resetcb(float[] a) {
+  if (valkyrie_connected) {
+    command(CMD.RESET);
+    resetcb.toggle(0);
+  }
+}
 void anlz(float[] a) {
-  //if (valkyrie_connected) { //<>//
+  //if (valkyrie_connected) {
     String[] cmd = { "python",  sketchPath("plot.py"),  sketchPath("telemetry.txt") } ;
     //exec(cmd);
 
@@ -492,6 +565,19 @@ void anlz(float[] a) {
     //if (a[0]>0) launch("python plot.py");
   //}
 }
+
+void Save() {
+   final String id = showInputDialog("Profile name:");  
+   if (id == null || id.length() == 0) return;
+   profile.put( id.trim(), 
+                String.format("KP = %f, KI = %f, KD = %f, TA = %f, HS = %d, LS = %d",
+                kPKnob.getValue()/100.0, kIKnob.getValue()/100.0, kDKnob.getValue()/100.0, 
+                taSlide.getValue(), 150, 70));
+   cp5.get(ScrollableList.class, "profile").setItems(profile.keySet().toArray("".split("",0)));
+   println("New profile: ", id);
+   write_profiles();
+}
+
 
 
 void controllerChange(int channel, int number, int value) {
