@@ -403,18 +403,7 @@ void draw() {
   if (valkyrie_connected && waiting_line && millis() > wait_timeout) resend() ;
 }
 
-void update_params( String[] response ) { //<>//
- for (int p=0; p<response.length; ++p) {
-   String[] p_v = response[p].split("=", 0);
-   switch(p_v[0].trim().toUpperCase()) {
-     case "KP": kPKnob.changeValue(100.0 * float(p_v[1])); break ;
-     case "KI": kIKnob.changeValue(100.0 * float(p_v[1])); break ;
-     case "KD": kDKnob.changeValue(100.0 * float(p_v[1])); break ;
-     case "TA": taSlide.changeValue(float(p_v[1])); break ;
-   }
- }
- 
-}
+ //<>//
 
 void serialEvent(Serial valkyrie) {
   
@@ -485,13 +474,6 @@ void connection(int n) {
   
 }
 
-void profile(int n) {
-
-  String name = String.class.cast((cp5.get(ScrollableList.class, "profile").getItem(n).get("text")));
-  println("loading profile: ", name, ":", profile.get(name));
-  update_params(profile.get(name).split(",", 0));
-
-}
 
 void kP(float theValue) {
   if (valkyrie_connected) {
@@ -566,6 +548,18 @@ void anlz(float[] a) {
   //}
 }
 
+void profile(int n) {
+
+  String name = String.class.cast((cp5.get(ScrollableList.class, "profile").getItem(n).get("text")));
+  println("loading profile: ", name, "\n", profile.get(name));
+  update_params(profile.get(name).split(",", 0));
+  kPKnob.setColorValueLabel(color(255,255,20));
+  kIKnob.setColorValueLabel(color(255,255,20));
+  kDKnob.setColorValueLabel(color(255,255,20));
+               
+
+}
+
 void Save() {
    final String id = showInputDialog("Profile name:");  
    if (id == null || id.length() == 0) return;
@@ -576,9 +570,20 @@ void Save() {
    cp5.get(ScrollableList.class, "profile").setItems(profile.keySet().toArray("".split("",0)));
    println("New profile: ", id);
    write_profiles();
+   cp5.get(ScrollableList.class, "profile").setLabel(id);
 }
 
-
+void update_params( String[] response ) {
+ for (int p=0; p<response.length; ++p) {
+   String[] p_v = response[p].split("=", 0);
+   switch(p_v[0].trim().toUpperCase()) {
+     case "KP": kPKnob.changeValue(100.0 * float(p_v[1])); break ;
+     case "KI": kIKnob.changeValue(100.0 * float(p_v[1])); break ;
+     case "KD": kDKnob.changeValue(100.0 * float(p_v[1])); break ;
+     case "TA": taSlide.changeValue(float(p_v[1])); break ;
+   }
+ }
+}
 
 void controllerChange(int channel, int number, int value) {
   //println(String.format("CH%d, CTRL %d = %d", channel, number, value)) ;

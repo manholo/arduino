@@ -160,45 +160,15 @@ float target =  3.89;
 
 
 // pid controler parameters plus motor parameters (common gain)
-#define HAWK
-//#define DOVE
-#define CABLE
-//#define BATT
-
-#ifdef HAWK
 float pid_P = 7.6370; //1.1692; // .9803; //0.685;
 float pid_I = 42.2750; //.2125; // .118; // 0.364;
 float pid_D = 1.5740; //.0590; //1.4173; // 1.8503;
 // motor velocities
-#ifdef CABLE
+
 int max_speed = 150 ;//171 ;// 250 ; // 120
 int min_speed = 37 ;//72 ; // 63 ; // 72 ; // 100 90 min 57
 
-#endif
-#ifdef BATT
-int max_speed =  230;
-int min_speed = 183 ;
-#endif
-#endif
-
-#ifdef DOVE
-float pid_P = .9094; 
-float pid_I = .2716; 
-float pid_D = .2362;  
-#ifdef CABLE
-int max_speed =  175 ;
-int min_speed = 57 ; 
-#endif
-#ifdef BATT
-int max_speed =  210;
-int min_speed = 150 ;
-
-#endif
-#endif
 int crash_fb = 60; //20 ;
-
-
-
 
 float int_error = 0 ;
 float speed_int_error = 0 ;
